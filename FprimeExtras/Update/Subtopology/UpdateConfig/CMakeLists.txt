@@ -1,0 +1,7 @@
+register_fprime_config(
+    EXCLUDE_FROM_ALL
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/UpdateConfig.fpp"
+    DEPENDS
+        Fw_Types
+)
