@@ -3,5 +3,5 @@ module Utilities {
     constant BUFFER_FANOUT_MULTI_SIZE = 4
 
     @ The maximum number of buffers that can be waited on for returning
-    constant BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT = 1
+    constant BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT = 10
 }
