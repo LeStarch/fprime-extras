@@ -1,3 +1,10 @@
+# ======================================================================
+# \title  BufferRepeater.fpp
+# \author starchmd
+# \brief  fpp file for BufferRepeater component implementation class
+# \copyright Copyright (c) 2025 Michael Starch
+# ======================================================================
+
 module Utilities {
     @ Repeats Fw.Buffer objects to multiple components via a BufferFanout interface. The intended source of the buffer
     @ is the singleIn port. The BufferRepeater will forward the buffer to all multiOut ports. When all multiIn ports

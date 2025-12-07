@@ -38,6 +38,7 @@ module Update {
         @ to running this command. 
         async command UPDATE_IMAGE_FROM(
             file: string size FileNameStringSize @< File to read the new image from
+            crc32: U32 @< Expected CRC32 of the file used to verify file integrity
         )
 
         @ Confirm that the currently running image is good. This will prevent reversion on next boot if the image

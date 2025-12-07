@@ -1,3 +1,9 @@
+# ======================================================================
+# \title  BufferCollector.fpp
+# \author starchmd
+# \brief  fpp file for BufferCollector component implementation class
+# \copyright Copyright (c) 2025 Michael Starch
+# ======================================================================
 module Utilities {
     @ Collects buffers from multiple sources and directs them to a single destination via a BufferFanout interface. The
     @ return path is mapped back to the source of the original buffer.

@@ -2,6 +2,7 @@
 // \title  BufferRepeater.hpp
 // \author starchmd
 // \brief  hpp file for BufferRepeater component implementation class
+// \copyright Copyright (c) 2025 Michael Starch
 // ======================================================================
 
 #ifndef Utilities_BufferRepeater_HPP

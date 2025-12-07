@@ -85,7 +85,7 @@ void Updater ::PREPARE_UPDATE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
     }
 }
 
-void Updater ::UPDATE_IMAGE_FROM_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, const Fw::CmdStringArg& file) {
+void Updater ::UPDATE_IMAGE_FROM_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, const Fw::CmdStringArg& file, U32 crc32) {
     // Read busy flag. If it is not already busy, then make it busy and move forward with the action
     bool already_busy = false;
     this->m_busy.compare_exchange_weak(already_busy, true);
@@ -95,7 +95,7 @@ void Updater ::UPDATE_IMAGE_FROM_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, con
         this->m_cmdSeq = cmdSeq;
         this->m_busy = true;
         this->log_ACTIVITY_HI_Update(file);
-        this->updateImage_out(0, file);
+        this->updateImage_out(0, file, crc32);
     } else {
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
     }

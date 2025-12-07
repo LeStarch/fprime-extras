@@ -2,6 +2,7 @@
 // \title  BufferRepeater.cpp
 // \author starchmd
 // \brief  cpp file for BufferRepeater component implementation class
+// \copyright Copyright (c) 2025 Michael Starch
 // ======================================================================
 
 #include "FprimeExtras/Utilities/BufferRepeater/BufferRepeater.hpp"

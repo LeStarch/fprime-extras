@@ -21,7 +21,8 @@ module Update {
 
     @ Port used to communicate a file to source an update
     port UpdateFile(
-        file: string size FileNameStringSize @< File to supplied to action
+        file: string size FileNameStringSize, @< File to supplied to action
+        crc32: U32 @< Expected CRC32 of the file used to verify file integrity
     )
 
     @Port used to set the next boot to use test  

@@ -2,6 +2,7 @@
 // \title  BufferCollector.hpp
 // \author starchmd
 // \brief  hpp file for BufferCollector component implementation class
+// \copyright Copyright (c) 2025 Michael Starch
 // ======================================================================
 
 #ifndef Utilities_BufferCollector_HPP

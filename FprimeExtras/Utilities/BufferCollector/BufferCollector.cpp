@@ -2,6 +2,7 @@
 // \title  BufferCollector.cpp
 // \author starchmd
 // \brief  cpp file for BufferCollector component implementation class
+// \copyright Copyright (c) 2025 Michael Starch
 // ======================================================================
 
 #include "FprimeExtras/Utilities/BufferCollector/BufferCollector.hpp"

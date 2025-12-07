@@ -1,3 +1,10 @@
+# ======================================================================
+# \title  BufferFanout.fpp
+# \author starchmd
+# \brief  fpp file for BufferFanout interface
+# \copyright Copyright (c) 2025 Michael Starch
+# ======================================================================
+
 module Utilities {
     @ Interface used for multiple Fw.Buffer port pairs (in/out) on one side and a single Fw.Buffer port pair on the
     @ other side. This allows users to draft components that can repeat buffers to multiple clients, or receive
