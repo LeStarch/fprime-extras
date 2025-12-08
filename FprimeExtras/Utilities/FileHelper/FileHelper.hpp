@@ -13,6 +13,22 @@
 #include "Fw/Types/Assert.hpp"
 #include "Os/File.hpp"
 
+// In order to have proper function overloading that supports both primitive types and serializable types, we need to
+// define SFINAE style templates that are only enabled for the specific types they handle.
+//
+// C++11 allows this via std::enable_if and std::is_fundamental / std::is_base_of type traits, however; the syntax is
+// ugly. C++14 is not yet fully supported by users of fprime-extras, so we cannot use the cleaner enabled_if_t.
+//
+// We can hide the ugly syntax behind these macros to make the code more readable and reusable.
+//
+// Note: in this file we choose to intercept the return type via SFINAE instead of adding an extra dummy template
+//       parameter. This is a style choice, both are valid ways to achieve the same goal.
+
+// SFINAE type for serializable types enabling the function only if T is derived from Fw::Serializable
+#define T_SERIALIZABLE_FW_STATUS typename std::enable_if<std::is_base_of<Fw::Serializable, T>::value, Os::File::Status>::type
+
+// SFINAE type for primitive types enabling the function only if T is a fundamental type
+#define T_PRIMITIVE_FW_STATUS typename std::enable_if<std::is_fundamental<T>::value, Os::File::Status>::type
 namespace Utilities {
 namespace FileHelper {
 
@@ -56,8 +72,8 @@ Os::File::Status writeToFile(Os::File& file, const Fw::Buffer& buffer);
 //! \param file The file to write to, must be opened.
 //! \param serializable The serializable to write to a file. Must implement Fw::Serializable interface.
 //! \return status of the file write operation
-template <typename T, typename = std::enable_if_t<std::is_base_of<Fw::Serializable, T>::value>>
-Os::File::Status writeToFile(Os::File& file, const T& serializable) {
+template <typename T>
+T_SERIALIZABLE_FW_STATUS writeToFile(Os::File& file, const T& serializable) {
     FW_ASSERT(file.isOpen());
     // Allocate exact size buffer for serialization
     U8 buffer_data[T::SERIALIZED_SIZE];
@@ -79,8 +95,8 @@ Os::File::Status writeToFile(Os::File& file, const T& serializable) {
 //! \param filepath The file to write to, must be opened.
 //! \param primitive The variable to write as the entire contents of the file
 //! \return status of the file write operation
-template <typename T, typename = std::enable_if_t<std::is_fundamental<T>::value>>
-Os::File::Status writeToFile(Os::File& file, T primitive) {
+template <typename T>
+T_PRIMITIVE_FW_STATUS writeToFile(Os::File& file, T primitive) {
     static_assert(std::is_fundamental<T>::value == true,
                   "FileHelper::writeBuffer can only be used with fundamental and Fw::Serializable types");
     FW_ASSERT(file.isOpen());
@@ -156,8 +172,7 @@ Os::File::Status readFromFile(Os::File& file, Fw::Buffer& buffer);
 //! \param serializable The serializable to write to a file. Must implement Fw::Serializable interface.
 //! \return status of the file write operation
 template <typename T>
-std::enable_if_t<std::is_base_of<Fw::Serializable, T>::value, Os::File::Status> readFromFile(Os::File& file,
-                                                                                             T& serializable) {
+T_SERIALIZABLE_FW_STATUS readFromFile(Os::File& file, T& serializable) {
     FW_ASSERT(file.isOpen());
     // Allocate exact size buffer for serialization
     U8 buffer_data[T::SERIALIZED_SIZE];
@@ -189,7 +204,7 @@ std::enable_if_t<std::is_base_of<Fw::Serializable, T>::value, Os::File::Status> 
 //! \param primitive The variable to write as the entire contents of the file
 //! \return status of the file write operation
 template <typename T>
-std::enable_if_t<std::is_fundamental<T>::value, Os::File::Status> readFromFile(Os::File& file, T& primitive) {
+T_PRIMITIVE_FW_STATUS readFromFile(Os::File& file, T& primitive) {
     static_assert(std::is_fundamental<T>::value,
                   "FileHelper::readBuffer can only be used with fundamental and Fw::Serializable types");
     FW_ASSERT(file.isOpen());
