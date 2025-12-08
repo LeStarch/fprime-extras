@@ -6,6 +6,7 @@
 // ======================================================================
 
 #include "FprimeExtras/Utilities/BufferRepeater/BufferRepeater.hpp"
+
 #include "Fw/DataStructures/RedBlackTreeMap.hpp"
 
 namespace Utilities {
@@ -43,7 +44,7 @@ void BufferRepeater ::multiIn_handler(FwIndexType portNum, Fw::Buffer& fwBuffer)
             status = this->m_bufferToCount.insert(fwBuffer.getData(), value);
             FW_ASSERT(status == Fw::Success::SUCCESS);
         }
-    } 
+    }
     // All multiOut ports have returned the buffer, return it to singleOut exactly once
     if (last_to_return) {
         this->singleOut_out(0, fwBuffer);
@@ -71,7 +72,9 @@ void BufferRepeater ::singleIn_handler(FwIndexType portNum, Fw::Buffer& fwBuffer
             FW_ASSERT(status != Fw::Success::SUCCESS);
             // Insert the buffer with the count of connected ports and ensure it was successful
             status = this->m_bufferToCount.insert(fwBuffer.getData(), connected_ports);
-            FW_ASSERT(status == Fw::Success::SUCCESS); // If this trips, Utilities::BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT is too small
+            FW_ASSERT(
+                status ==
+                Fw::Success::SUCCESS);  // If this trips, Utilities::BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT is too small
         }
         // Perform the multiOut fan out
         for (FwIndexType i = 0; i < this->NUM_MULTIOUT_OUTPUT_PORTS; i++) {

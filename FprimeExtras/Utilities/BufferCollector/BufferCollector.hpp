@@ -8,8 +8,8 @@
 #ifndef Utilities_BufferCollector_HPP
 #define Utilities_BufferCollector_HPP
 
-#include "FprimeExtras/Utilities/BufferCollector/BufferCollectorComponentAc.hpp"
 #include "ExtrasConfig/FppConstantsAc.hpp"
+#include "FprimeExtras/Utilities/BufferCollector/BufferCollectorComponentAc.hpp"
 #include "Fw/DataStructures/ArrayMap.hpp"
 #include "Os/Mutex.hpp"
 
@@ -48,6 +48,7 @@ class BufferCollector final : public BufferCollectorComponentBase {
     void singleIn_handler(FwIndexType portNum,  //!< The port number
                           Fw::Buffer& fwBuffer  //!< The buffer
                           ) override;
+
   private:
     Fw::ArrayMap<U8*, FwIndexType, Utilities::BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT> m_bufferToIndex;
     Os::Mutex m_mapLock;

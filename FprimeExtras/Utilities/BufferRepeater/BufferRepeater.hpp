@@ -8,8 +8,8 @@
 #ifndef Utilities_BufferRepeater_HPP
 #define Utilities_BufferRepeater_HPP
 
-#include "FprimeExtras/Utilities/BufferRepeater/BufferRepeaterComponentAc.hpp"
 #include "ExtrasConfig/FppConstantsAc.hpp"
+#include "FprimeExtras/Utilities/BufferRepeater/BufferRepeaterComponentAc.hpp"
 #include "Fw/DataStructures/RedBlackTreeMap.hpp"
 #include "Os/Mutex.hpp"
 
@@ -48,6 +48,7 @@ class BufferRepeater final : public BufferRepeaterComponentBase {
     void singleIn_handler(FwIndexType portNum,  //!< The port number
                           Fw::Buffer& fwBuffer  //!< The buffer
                           ) override;
+
   private:
     Fw::RedBlackTreeMap<U8*, FwIndexType, Utilities::BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT> m_bufferToCount;
     Os::Mutex m_mapLock;

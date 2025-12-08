@@ -6,6 +6,7 @@
 // ======================================================================
 
 #include "FprimeExtras/Utilities/BufferCollector/BufferCollector.hpp"
+
 #include "Fw/Logger/Logger.hpp"
 
 namespace Utilities {

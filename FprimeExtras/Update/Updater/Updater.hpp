@@ -72,10 +72,10 @@ class Updater final : public UpdaterComponentBase {
     //!
     //! Performs an update from the supplied file. Users are expected to have run the PREPARE_UPDATE command prior
     //! to running this command.
-    void UPDATE_IMAGE_FROM_cmdHandler(FwOpcodeType opCode,          //!< The opcode
-                                      U32 cmdSeq,                   //!< The command sequence number
-                                      const Fw::CmdStringArg& file, //!< File to read the new image from
-                                      U32 crc32                     //!< Expected CRC32 of the file used to verify file integrity
+    void UPDATE_IMAGE_FROM_cmdHandler(FwOpcodeType opCode,           //!< The opcode
+                                      U32 cmdSeq,                    //!< The command sequence number
+                                      const Fw::CmdStringArg& file,  //!< File to read the new image from
+                                      U32 crc32  //!< Expected CRC32 of the file used to verify file integrity
                                       ) override;
 
     //! Handler implementation for command CONFIRM_UPDATE
