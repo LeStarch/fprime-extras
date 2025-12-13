@@ -6,8 +6,8 @@
 // ======================================================================
 
 #include "FprimeExtras/Utilities/BufferRepeater/BufferRepeater.hpp"
+#include "Fw/Logger/Logger.hpp"
 
-#include "Fw/DataStructures/RedBlackTreeMap.hpp"
 
 namespace Utilities {
 
@@ -28,7 +28,7 @@ void BufferRepeater ::multiIn_handler(FwIndexType portNum, Fw::Buffer& fwBuffer)
     // Decrement the count for this buffer in the map and update last_to_return if this was the last outstanding buffer
     {
         Os::ScopeLock lock(this->m_mapLock);
-
+        Fw::Logger::log("BufferRepeater: multiIn_handler called on port %" PRI_FwIndexType " with %p\n", portNum, fwBuffer.getData());
         // First get the original value ensuring no unknown buffers were returned
         FwIndexType value = 0;
         Fw::Success status = this->m_bufferToCount.find(fwBuffer.getData(), value);
@@ -47,16 +47,21 @@ void BufferRepeater ::multiIn_handler(FwIndexType portNum, Fw::Buffer& fwBuffer)
     }
     // All multiOut ports have returned the buffer, return it to singleOut exactly once
     if (last_to_return) {
+        Fw::Logger::log("BufferRepeater: singleOut_out: %p\n", fwBuffer.getData());
         this->singleOut_out(0, fwBuffer);
     }
 }
 
 void BufferRepeater ::singleIn_handler(FwIndexType portNum, Fw::Buffer& fwBuffer) {
+    Fw::ParamValid isValid = Fw::ParamValid::INVALID;
+    const auto enabled_array = this->paramGet_CHANNEL_ENABLED(isValid);
+    FW_ASSERT((isValid == Fw::ParamValid::VALID) || (isValid == Fw::ParamValid::DEFAULT), static_cast<FwAssertArgType>(isValid));
+    
     // Determine the number of connected multiOut ports. This must be done before the fan out to avoid buffer returns
     // while computing the necessary return count.
     FwIndexType connected_ports = 0;
     for (FwIndexType i = 0; i < this->NUM_MULTIOUT_OUTPUT_PORTS; i++) {
-        if (this->isConnected_multiOut_OutputPort(i)) {
+        if (this->isConnected_multiOut_OutputPort(i) && (enabled_array[i] == Fw::Enabled::ENABLED)) {
             connected_ports += 1;
         }
     }
@@ -78,12 +83,14 @@ void BufferRepeater ::singleIn_handler(FwIndexType portNum, Fw::Buffer& fwBuffer
         }
         // Perform the multiOut fan out
         for (FwIndexType i = 0; i < this->NUM_MULTIOUT_OUTPUT_PORTS; i++) {
-            if (this->isConnected_multiOut_OutputPort(i)) {
+            if (this->isConnected_multiOut_OutputPort(i) && (enabled_array[i] == Fw::Enabled::ENABLED)) {
+                Fw::Logger::log("BufferRepeater: multiOut_out called on port %" PRI_FwIndexType " with %p\n", i, fwBuffer.getData());
                 this->multiOut_out(i, fwBuffer);
             }
         }
     } else {
         // No connected multiOut ports, return buffer immediately
+        Fw::Logger::log("BufferRepeater: singleOut_out called directly with %p\n", fwBuffer.getData());
         this->singleOut_out(0, fwBuffer);
     }
 }

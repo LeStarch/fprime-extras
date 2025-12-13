@@ -10,7 +10,7 @@
 
 #include "ExtrasConfig/FppConstantsAc.hpp"
 #include "FprimeExtras/Utilities/BufferRepeater/BufferRepeaterComponentAc.hpp"
-#include "Fw/DataStructures/RedBlackTreeMap.hpp"
+#include "Fw/DataStructures/ArrayMap.hpp"
 #include "Os/Mutex.hpp"
 
 namespace Utilities {
@@ -50,7 +50,7 @@ class BufferRepeater final : public BufferRepeaterComponentBase {
                           ) override;
 
   private:
-    Fw::RedBlackTreeMap<U8*, FwIndexType, Utilities::BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT> m_bufferToCount;
+    Fw::ArrayMap<U8*, FwIndexType, Utilities::BUFFER_FANOUT_MAX_BUFFERS_IN_FLIGHT> m_bufferToCount;
     Os::Mutex m_mapLock;
 };
 
