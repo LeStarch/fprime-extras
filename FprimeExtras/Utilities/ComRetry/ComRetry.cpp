@@ -16,8 +16,8 @@ ComRetry ::ComRetry(const char* const compName)
     : ComRetryComponentBase(compName),
       m_num_retries(3),
       m_retry_count(0),
-      m_bufferState(Fw::Buffer::OwnershipState::OWNED),
-      m_retry_state(RetryState::WAITING_FOR_SEND) {}
+      m_retry_state(RetryState::WAITING_FOR_SEND),
+      m_bufferState(Fw::Buffer::OwnershipState::OWNED) {}
 
 ComRetry ::~ComRetry() {}
 
