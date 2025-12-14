@@ -6,7 +6,6 @@
 
 #include "FprimeExtras/Utilities/ComRetry/ComRetry.hpp"
 #include "ComRetry.hpp"
-#include "Fw/Logger/Logger.hpp"
 namespace Svc {
 
 // ----------------------------------------------------------------------
