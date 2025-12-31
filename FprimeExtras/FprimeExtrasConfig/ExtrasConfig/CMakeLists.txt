@@ -2,6 +2,8 @@ register_fprime_config(
         FPrimeExtras_FPrimeExtrasConfig
     AUTOCODER_INPUTS
         "${CMAKE_CURRENT_SOURCE_DIR}/BufferRepeaterConfig.fpp"
+    HEADERS
+        "${CMAKE_CURRENT_SOURCE_DIR}/DropDetectorConfig.hpp"
     BASE_CONFIG
     DEPENDS
         Fw_Types
