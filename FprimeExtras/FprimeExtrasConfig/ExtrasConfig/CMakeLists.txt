@@ -5,4 +5,6 @@ register_fprime_config(
     HEADERS
         "${CMAKE_CURRENT_SOURCE_DIR}/DropDetectorConfig.hpp"
     BASE_CONFIG
+    DEPENDS
+        "${FPRIME_GLOBAL_INTERFACE_TARGET}"
 )
