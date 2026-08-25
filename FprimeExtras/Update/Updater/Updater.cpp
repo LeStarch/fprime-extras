@@ -48,7 +48,7 @@ void Updater ::updateImageDone_handler(FwIndexType portNum, const Update::Update
 // Handler implementations for commands
 // ----------------------------------------------------------------------
 
-void Updater ::CONFIGURE_NEXT_BOOT_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, Update::NextBootMode next) {
+void Updater ::CONFIGURE_NEXT_BOOT_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, const Update::NextBootMode& next) {
     // Read busy flag. If it is not already busy, then make it busy and move forward with the update
     bool already_busy = false;
     this->m_busy.compare_exchange_weak(already_busy, true);

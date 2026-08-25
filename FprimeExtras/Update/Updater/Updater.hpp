@@ -57,7 +57,7 @@ class Updater final : public UpdaterComponentBase {
     //! then sets the image as the permanent boot image.
     void CONFIGURE_NEXT_BOOT_cmdHandler(FwOpcodeType opCode,       //!< The opcode
                                         U32 cmdSeq,                //!< The command sequence number
-                                        Update::NextBootMode next  //!< Mode of the next boot
+                                        const Update::NextBootMode& next  //!< Mode of the next boot
                                         ) override;
 
     //! Handler implementation for command PREPARE_UPDATE
