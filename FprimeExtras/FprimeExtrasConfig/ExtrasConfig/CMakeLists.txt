@@ -5,6 +5,4 @@ register_fprime_config(
     HEADERS
         "${CMAKE_CURRENT_SOURCE_DIR}/DropDetectorConfig.hpp"
     BASE_CONFIG
-    DEPENDS
-        Fw_Types
 )
