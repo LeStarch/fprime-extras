@@ -6,5 +6,5 @@ register_fprime_config(
         "${CMAKE_CURRENT_SOURCE_DIR}/DropDetectorConfig.hpp"
     BASE_CONFIG
     DEPENDS
-        Fw_Types
+        "${FPRIME_GLOBAL_INTERFACE_TARGET}"
 )
