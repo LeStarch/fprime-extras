@@ -27,3 +27,17 @@ Configure component properties and worker component:
 ### Configurable Components
 
 `worker`
+## Delta patching
+
+The subtopology instantiates `deltaPatcher: Update.DeltaPatcher` (base id `BASE_ID + 0x2000`, queue size
+`QueueSizes.deltaPatcher`). It is a queued component with no thread of its own: the deployment **must** connect a
+rate group to `deltaPatcher.run`, e.g.
+
+```fpp
+rateGroup3.RateGroupMemberOut[N] -> Update.deltaPatcher.run
+```
+
+`deltaPatcher.patchComplete` is left unconnected. After `PatchComplete(new_file, new_crc32)` the operator issues
+`updater.UPDATE_IMAGE_FROM(new_file, new_crc32)` to install the reconstructed image. A deployment may instead wire
+`deltaPatcher.patchComplete -> worker.updateImage` to install automatically. See
+`FprimeExtras/Update/DeltaPatcher/docs/sdd.md`.

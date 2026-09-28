@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fprime-extras-spatch"
+version = "0.1.0"
+description = "SPatch delta-patch ground tooling for fprime-extras"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Michael Starch" }]
+requires-python = ">=3.8"
+dependencies = ["bsdiff4>=1.2"]
+
+[project.scripts]
+fprime-extras-spatch = "fprime_extras_spatch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fprime_extras_spatch*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
