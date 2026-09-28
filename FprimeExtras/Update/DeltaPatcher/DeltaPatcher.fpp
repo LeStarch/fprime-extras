@@ -66,7 +66,7 @@ module Update {
 
         @ A chunk failed to apply; patching stops
         event ChunkFailed(
-            chunk: U32 @< Failing chunk index
+            chunk: U32 @< Failing chunk index, or ChunksTotal for whole-image failures
             status: DeltaPatchStatus @< Reason
         ) severity warning high format "Chunk {} failed: {}"
 

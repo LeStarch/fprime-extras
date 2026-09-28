@@ -12,7 +12,7 @@ from importlib.metadata import version as _pkg_version
 
 from fprime_extras_spatch import coders, spatch
 
-CHUNK_BYTES = 300  # below the buffer sizes so every chunk crosses buffer boundaries; many chunks per image
+CHUNK_BYTES = 300  # above the 256 B buffer sizes so every chunk crosses buffer boundaries; many chunks per image
 
 
 def make_images():

@@ -20,8 +20,9 @@ the flight side. The coder must match the coder installed in the flight `DeltaPa
 
 See `FprimeExtras/Update/DeltaPatcher/docs/sdd.md` for the SPatch v1 container, operation and coder formats. The
 C++ decoder in `FprimeExtras/Update/Delta/` is the flight implementation; `spatch.py`/`coders.py` are the
-reference implementation and are cross-checked against it by
-`FprimeExtras/Update/Delta/test/ut/generate_vectors.py`.
+reference implementation; `FprimeExtras/Update/Delta/test/ut/generate_vectors.py` (run after `pip install ./python`,
+with the `bsdiff4` version it records) emits ground-produced vectors that `DeltaTestMain.cpp` checks the flight
+decoder against.
 
 ## Matchers and licensing
 
@@ -38,5 +39,5 @@ decoder, coders and container are original work released under the repository's 
 coder is an original small-window format and decoder; it does not include code from heatshrink or other
 compressors.
 
-Adding an `hdiffz` (HDiffPatch, MIT) backend is planned; measured patches are typically 10–30 % smaller than
-`bsdiff4` before coding.
+Adding an `hdiffz` (HDiffPatch, MIT) backend is planned; in an informal comparison on two small binaries its
+uncoded patches were 10–30 % smaller than `bsdiff4`'s.

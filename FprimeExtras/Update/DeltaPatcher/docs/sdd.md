@@ -57,8 +57,10 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 * **Command completion.** `APPLY_PATCH` responds when the codec reaches `COMPLETE` (OK) or `FAILED`
   (EXECUTION_ERROR). Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
   failures, old-image *size* mismatch, `OUTPUT_STALE`) respond at once with `PatchRejected`. Failures detected while
-  stepping (old-image *CRC* mismatch → `OldImageMismatch`; resume-verification or chunk errors → `ChunkFailed`)
-  complete the deferred command with EXECUTION_ERROR.
+  stepping (old-image *CRC* mismatch → `OldImageMismatch`; resume-verification, chunk, or final-image errors →
+  `ChunkFailed`) complete the deferred command with EXECUTION_ERROR. For final-image errors (`PATCH_SIZE_MISMATCH`,
+  `NEW_IMAGE_MISMATCH`) `ChunkFailed.chunk` equals `ChunksTotal`: every chunk verified, but the patch has trailing
+  bytes or the stored image differs from the header. Resuming will not help; regenerate and re-uplink the patch.
 * **Abort.** `ABORT_PATCH` closes the media, responds `EXECUTION_ERROR` to the pending `APPLY_PATCH`, emits
   `PatchAborted` and leaves `new_file` in place. When idle it emits `AbortIgnored` and responds `VALIDATION_ERROR`.
 * **Coder seam.** `DeltaPatcher::setCoder(DeltaCoder&)` (call during topology setup, before rate groups start; `FW_ASSERT`s if a patch is in progress; the coder must outlive the component) substitutes a
@@ -123,7 +125,7 @@ possible without touching the patch payload.
 | `PatchResumed` | activity high | Resumed at the given chunk |
 | `PatchRejected` | warning high | Command rejected with `DeltaPatchStatus` |
 | `OldImageMismatch` | warning high | Old image CRC differs from header (size mismatch is reported via `PatchRejected`) |
-| `ChunkFailed` | warning high | Chunk failed with `DeltaPatchStatus` |
+| `ChunkFailed` | warning high | Chunk (or, with `chunk == ChunksTotal`, final image) failed with `DeltaPatchStatus` |
 | `PatchComplete` | activity high | New image written and verified |
 | `PatchAborted` | activity high | Operator abort |
 | `AbortIgnored` | warning low | `ABORT_PATCH` received while not patching |
@@ -164,5 +166,16 @@ part of flight code. The tool enforces the same chunk/image caps as `DeltaCodecC
 
 ## Unit tests
 
-`test/ut/` covers nominal, busy, open failure, bad header, old-image mismatch, chunk corruption + resume, abort +
-resume, and abort while idle. The codec library tests live in `FprimeExtras/Update/Delta/test/ut/`.
+`test/ut/` covers nominal, busy, open failure, bad header, coder mismatch, old-image mismatch, chunk corruption +
+resume, abort + resume, abort while idle, same-file rejection, and queue overflow. The codec library tests live in
+`FprimeExtras/Update/Delta/test/ut/`.
+
+## Integration tests
+
+`test/int/test_delta_patcher.py` runs against a deployment that instantiates the Update subtopology, connects a
+rate group to `deltaPatcher.run`, and lets FileUplink write to `/tmp/uplink` (GDS and FSW on the same host). It
+needs `fprime-gds` and `pip install ./python`, and resolves the instance through the integration-config key
+`Update.DeltaPatcher`:
+
+    pytest FprimeExtras/Update/DeltaPatcher/test/int --dictionary <deployment>/dict/<Topology>TopologyDictionary.json \
+        --deployment-config <deployment>/test/int/int_config.json

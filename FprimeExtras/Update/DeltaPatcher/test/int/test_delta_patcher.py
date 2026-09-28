@@ -14,7 +14,7 @@ The instance is resolved through the integration config key "Update.DeltaPatcher
     pytest --dictionary <deployment>/dict/*TopologyDictionary.json --deployment-config <deployment>/test/int/int_config.json
 
 @author Michael Starch
-@copyright Michael Starch, 2025
+@copyright Michael Starch, 2026
 @license Apache-2.0
 """
 
