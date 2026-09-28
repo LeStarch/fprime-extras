@@ -8,18 +8,21 @@
 #
 module Update {
     @ Applies an uplinked SPatch file to an on-board old image, producing a new image file suitable for
-    @ Updater.UPDATE_IMAGE_FROM. The component is queued: commands are dispatched and a bounded amount of patch work
-    @ (at most one chunk plus a bounded amount of CRC verification) is performed on each `run` invocation.
+    @ Updater.UPDATE_IMAGE_FROM. The component is queued: on each `run` invocation up to MAX_DISPATCH_PER_TICK queued
+    @ commands are dispatched, then one bounded step of patch work is performed: either CRC verification of up to
+    @ DELTA_VERIFY_BYTES_PER_STEP bytes, or one chunk of at most DELTA_MAX_CHUNK_BYTES output bytes. Each step performs
+    @ blocking Os::File I/O on the rate-group thread, so `run` should be driven from a slow, non-critical rate group.
     @
-    @ The old image is never modified. If the new file already holds a prefix of CRC-verified chunks (e.g. after a
-    @ reboot), patching resumes at the first unverified chunk. RAM usage is fixed at construction and the engine never
-    @ allocates.
+    @ The old image is never modified (old_file, patch_file and new_file must name distinct files). If the new file
+    @ already holds a prefix of CRC-verified chunks (e.g. after a reboot), patching resumes at the first unverified
+    @ chunk. RAM usage is fixed at construction and the engine never allocates.
     queued component DeltaPatcher {
 
         @ Rate-group tick: dispatches queued commands, then performs one bounded step of patch work
         sync input port run: Svc.Sched
 
-        @ Emitted on successful completion with (new_file, new_crc32); connect to updater.updateImage or leave open
+        @ Emitted on successful completion with (new_file, new_crc32). Left unconnected by default: operators install
+        @ the image with updater.UPDATE_IMAGE_FROM. Must not be wired to worker.updateImage (updater owns the worker).
         output port patchComplete: UpdateFile
 
         @ Start applying patch_file to old_file writing new_file. Resumes if new_file already holds verified chunks.
@@ -28,10 +31,10 @@ module Update {
             old_file: string size FileNameStringSize @< Existing image (never modified)
             patch_file: string size FileNameStringSize @< Uplinked .spatch file
             new_file: string size FileNameStringSize @< Output image (created or extended)
-        )
+        ) drop
 
         @ Abort an in-progress patch; the partial new_file is retained for later resume
-        async command ABORT_PATCH()
+        async command ABORT_PATCH() drop
 
         @ A patch has been accepted and started
         event PatchStarted(
@@ -78,6 +81,11 @@ module Update {
         event PatchAborted(
             chunk: U32 @< Next chunk that would have been applied
         ) severity activity high format "Patch aborted at chunk {}"
+
+        @ ABORT_PATCH was received while no patch was in progress
+        event AbortIgnored(
+            current: DeltaPatchState @< Current patcher state
+        ) severity warning low format "ABORT_PATCH ignored: patcher state is {}"
 
         @ Current patcher state
         telemetry State: DeltaPatchState update on change

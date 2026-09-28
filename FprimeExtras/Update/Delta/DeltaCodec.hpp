@@ -17,7 +17,7 @@ namespace Update {
 
 //! \brief Allocation-free, bounded-step SPatch v1 engine
 //!
-//! Applies an SPatch (see docs/spatch-format.md) held in `patch` media to the `oldImage` media producing the
+//! Applies an SPatch (format: FprimeExtras/Update/DeltaPatcher/docs/sdd.md) held in `patch` media to the `oldImage` media producing the
 //! `newImage` media. Work is performed in step() calls, each bounded to one chunk (or DELTA_VERIFY_BYTES_PER_STEP
 //! bytes of CRC verification), so the engine may be driven from a rate group. All storage is fixed: three buffers
 //! sized by DeltaCodecConfig.hpp plus scalar state.
@@ -58,6 +58,8 @@ class DeltaCodec final {
 
     //! Construct an engine using the supplied coder
     explicit DeltaCodec(DeltaCoder& coder);
+    DeltaCodec(const DeltaCodec&) = delete;
+    DeltaCodec& operator=(const DeltaCodec&) = delete;
 
     //! Replace the coder (project plugin seam); only permitted while IDLE
     void setCoder(DeltaCoder& coder);

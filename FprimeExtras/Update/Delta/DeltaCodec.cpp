@@ -101,7 +101,8 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
     this->m_newSize = readU32(header + 16);
     this->m_newCrc = readU32(header + 20);
     this->m_chunkBytes = readU32(header + 24);
-    if (this->m_chunkBytes == 0) {
+    if (this->m_chunkBytes == 0 || this->m_chunkBytes > DELTA_MAX_CHUNK_BYTES ||
+        this->m_oldSize > DELTA_MAX_IMAGE_SIZE || this->m_newSize > DELTA_MAX_IMAGE_SIZE) {
         return this->fail(BAD_HEADER);
     }
     this->m_chunkCount =
@@ -179,7 +180,11 @@ DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc
     }
     codedLength = readU32(this->m_patchBuffer);
     crc = readU32(this->m_patchBuffer + 4);
-    if (this->m_patchPos + CHUNK_HEADER_SIZE + codedLength > this->m_patchSize) {
+    if (codedLength > DELTA_MAX_CODED_CHUNK_BYTES) {
+        return BAD_OPCODE;
+    }
+    // Subtraction form: m_patchPos + CHUNK_HEADER_SIZE <= m_patchSize was established above, so this cannot wrap
+    if (codedLength > this->m_patchSize - (this->m_patchPos + CHUNK_HEADER_SIZE)) {
         return TRUNCATED;
     }
     return OP_OK;

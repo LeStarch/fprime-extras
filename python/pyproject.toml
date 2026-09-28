@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Michael Starch" }]
 requires-python = ">=3.8"
-dependencies = ["bsdiff4>=1.2"]
+dependencies = ["bsdiff4>=1.2,<2"]
 
 [project.scripts]
 fprime-extras-spatch = "fprime_extras_spatch.cli:main"

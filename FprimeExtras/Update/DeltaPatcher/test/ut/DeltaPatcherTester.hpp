@@ -73,6 +73,9 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! ABORT_PATCH when idle is a validation error
     void abortIdle();
 
+    //! APPLY_PATCH with new_file == old_file is rejected with SAME_FILE before any file is opened
+    void sameFile();
+
   private:
     // ----------------------------------------------------------------------
     // Helper functions

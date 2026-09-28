@@ -29,7 +29,8 @@ module Update {
         NEW_IMAGE_MISMATCH, @< Final new image size or CRC differs from header
         PATCH_SIZE_MISMATCH, @< Patch file has trailing bytes after the final chunk
         OUTPUT_STALE,       @< Existing new file is larger than the header's new size
-        ABORTED             @< Operator abort
+        ABORTED,            @< Operator abort
+        SAME_FILE           @< old_file, patch_file and new_file must be distinct
     }
 
     @ State of the DeltaPatcher

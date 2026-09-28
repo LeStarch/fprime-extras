@@ -9,7 +9,7 @@ pip install ./python
 fprime-extras-spatch create old.bin new.bin update.spatch            # lzss coder, bsdiff4 matcher
 fprime-extras-spatch create old.bin new.bin update.spatch --coder rle --chunk-bytes 4096
 fprime-extras-spatch info   update.spatch
-fprime-extras-spatch verify old.bin update.spatch --new new.bin      # decode and compare
+fprime-extras-spatch verify old.bin update.spatch new.bin            # decode and compare
 fprime-extras-spatch apply  old.bin update.spatch out.bin            # reference decoder
 ```
 

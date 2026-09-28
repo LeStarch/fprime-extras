@@ -33,16 +33,25 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 
 * **Queued component.** `run_handler` dispatches at most `MAX_DISPATCH_PER_TICK` queued messages and then, if
   patching, performs exactly one `DeltaCodec::step()`. A step verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes
-  or processes at most one chunk of `chunk_bytes` output, so per-tick time is bounded by configuration.
-* **Media.** `old_file` and `patch_file` are opened `READ_ONLY`; `new_file` is opened `READ_WRITE` (created if
-  absent, preserved otherwise so a partial output can be resumed).
+  or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
+  `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
+  with `BAD_HEADER`/`BAD_OPCODE`, so per-tick work is bounded by flight configuration rather than by the patch. The
+  step performs blocking `Os::File` I/O on the rate-group thread; drive `run` from a slow, non-critical rate group.
+* **Media.** `old_file`, `patch_file` and `new_file` must be distinct strings (`SAME_FILE` otherwise; path aliases
+  such as symlinks are not detected). `old_file` and `patch_file` are opened `READ_ONLY`; `new_file` is opened
+  `READ_WRITE` (created if absent, preserved otherwise so a partial output can be resumed). If an existing
+  `new_file` is larger than the header's `new_size` the command is rejected with `OUTPUT_STALE`; the operator
+  removes it (e.g. `Svc.FileManager.RemoveFile`) and re-issues `APPLY_PATCH`.
 * **Resume.** On `begin()`, the codec walks the existing `new_file` chunk-by-chunk, comparing the CRC of each
   prefix chunk to the CRC stored in the patch. Patching restarts at the first chunk that does not verify. No coder
   state is persisted because each chunk is coded independently. `PatchResumed(chunk)` reports the restart point.
 * **Command completion.** `APPLY_PATCH` responds when the codec reaches `COMPLETE` (OK) or `FAILED`
-  (EXECUTION_ERROR). Immediate rejections (`BUSY`, `OPEN_FAILED`, header/old-image failures) respond at once.
+  (EXECUTION_ERROR). Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
+  failures, old-image *size* mismatch, `OUTPUT_STALE`) respond at once with `PatchRejected`. Failures detected while
+  stepping (old-image *CRC* mismatch → `OldImageMismatch`; resume-verification or chunk errors → `ChunkFailed`)
+  complete the deferred command with EXECUTION_ERROR.
 * **Abort.** `ABORT_PATCH` closes the media, responds `EXECUTION_ERROR` to the pending `APPLY_PATCH`, emits
-  `PatchAborted` and leaves `new_file` in place. When idle it responds `VALIDATION_ERROR`.
+  `PatchAborted` and leaves `new_file` in place. When idle it emits `AbortIgnored` and responds `VALIDATION_ERROR`.
 * **Coder seam.** `DeltaPatcher::setCoder(DeltaCoder&)` (call before the topology starts) substitutes a
   project-supplied decompressor. The coder id in the SPatch header must match the installed coder.
 
@@ -73,6 +82,12 @@ SEEK  0x03  svar d            old cursor += d              (zigzag)
 
 Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `Delta/DeltaCoder.hpp`).
 
+The chunk count and each chunk's raw length are derived from `new_size` and `chunk_bytes` rather than carried in
+the file, and the per-chunk CRC covers the *decoded output* rather than the coded payload: a corrupted payload
+either fails to decode (`MALFORMED`/`TRUNCATED`) or produces output whose CRC does not match, while the output
+CRC additionally guards against decoder faults and is what makes the resume scan (re-reading the new image only)
+possible without touching the patch payload.
+
 ## Ports
 
 | Name | Kind | Type | Description |
@@ -94,10 +109,11 @@ Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `D
 | `PatchStarted` | activity high | Files accepted, header verified |
 | `PatchResumed` | activity high | Resumed at the given chunk |
 | `PatchRejected` | warning high | Command rejected with `DeltaPatchStatus` |
-| `OldImageMismatch` | warning high | Old image size/CRC differs from header |
+| `OldImageMismatch` | warning high | Old image CRC differs from header (size mismatch is reported via `PatchRejected`) |
 | `ChunkFailed` | warning high | Chunk failed with `DeltaPatchStatus` |
 | `PatchComplete` | activity high | New image written and verified |
 | `PatchAborted` | activity high | Operator abort |
+| `AbortIgnored` | warning low | `ABORT_PATCH` received while not patching |
 
 ## Telemetry
 
@@ -117,8 +133,11 @@ Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `D
 | --- | --- | --- |
 | `DELTA_PATCH_BUFFER_SIZE` | 256 | Coded patch read buffer |
 | `DELTA_RING_SIZE` | 256 | Decoded op stream ring / LZSS window |
-| `DELTA_OUTPUT_BUFFER_SIZE` | 256 | Output staging buffer |
+| `DELTA_OUTPUT_BUFFER_SIZE` | 256 | Output staging buffer; also the old-image read granularity (COPY/ADD, CRC) |
 | `DELTA_VERIFY_BYTES_PER_STEP` | 4096 | CRC bytes per `run` tick during verification |
+| `DELTA_MAX_CHUNK_BYTES` | 8192 | Largest header `chunk_bytes` accepted; bounds output bytes per `run` tick |
+| `DELTA_MAX_CODED_CHUNK_BYTES` | 16384 | Largest `coded_len` accepted; bounds patch bytes decoded per tick |
+| `DELTA_MAX_IMAGE_SIZE` | 64 MiB | Largest old/new image accepted; bounds storage used by `new_file` |
 
 RAM (measured, x86-64): `DeltaCodec` 928 B + `DeltaCoderLzss` 32 B = 960 B. `Os::File` handles inside
 `DeltaFileMedia` are platform-owned and outside this budget.
@@ -126,7 +145,8 @@ RAM (measured, x86-64): `DeltaCodec` 928 B + `DeltaCoderLzss` 32 B = 960 B. `Os:
 ## Ground tooling
 
 `python/fprime_extras_spatch` (`fprime-extras-spatch create|apply|verify|info`) produces and checks SPatch files. It
-uses `bsdiff4` (BSD-2-Clause) or an external `hdiffz` (MIT) as the matcher; neither is part of flight code.
+uses `bsdiff4` (BSD-2-Clause) as the matcher (an `hdiffz`/HDiffPatch, MIT, backend is planned); no matcher code is
+part of flight code. The tool enforces the same chunk/image caps as `DeltaCodecConfig.hpp`.
 
 ## Unit tests
 

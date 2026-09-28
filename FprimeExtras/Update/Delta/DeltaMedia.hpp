@@ -51,6 +51,8 @@ class DeltaFileMedia final : public DeltaMedia {
 
     DeltaFileMedia();
     ~DeltaFileMedia() override;
+    DeltaFileMedia(const DeltaFileMedia&) = delete;
+    DeltaFileMedia& operator=(const DeltaFileMedia&) = delete;
 
     //! Open `path` with the requested access
     Os::File::Status open(const char* path, Access access);

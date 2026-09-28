@@ -25,7 +25,7 @@ from __future__ import annotations
 import struct
 import zlib
 from dataclasses import dataclass
-from typing import Iterable, Iterator, List, Optional, Tuple
+from typing import Iterable, Iterator
 
 from . import coders
 
@@ -34,6 +34,10 @@ VERSION = 1
 HEADER_SIZE = 32
 CHUNK_HEADER_SIZE = 8
 DEFAULT_CHUNK_BYTES = 4096
+# Flight-side limits (must match ExtrasConfig/DeltaCodecConfig.hpp); patches exceeding them are rejected on board
+MAX_CHUNK_BYTES = 8192
+MAX_CODED_CHUNK_BYTES = 2 * MAX_CHUNK_BYTES
+MAX_IMAGE_SIZE = 64 * 1024 * 1024
 DEFAULT_COPY_MIN = 8
 
 OP_COPY = 0
@@ -68,7 +72,7 @@ def svar(value: int) -> bytes:
     return uvar((value << 1) ^ (value >> 63)) if value < 0 else uvar(value << 1)
 
 
-def read_uvar(data: bytes, pos: int) -> Tuple[int, int]:
+def read_uvar(data: bytes, pos: int) -> tuple[int, int]:
     value = 0
     for i in range(5):
         if pos + i >= len(data):
@@ -99,7 +103,7 @@ class Op:
         return bytes([self.kind]) + uvar(self.length) + self.data
 
 
-def ops_from_bsdiff(old: bytes, new: bytes, copy_min: int = DEFAULT_COPY_MIN) -> List[Op]:
+def ops_from_bsdiff(old: bytes, new: bytes, copy_min: int = DEFAULT_COPY_MIN) -> list[Op]:
     """Derive an op stream using the bsdiff4 matcher (control triples + diff + extra blocks).
 
     Runs of zero diff bytes of at least `copy_min` are folded into COPY ops so the coder never sees them.
@@ -107,7 +111,7 @@ def ops_from_bsdiff(old: bytes, new: bytes, copy_min: int = DEFAULT_COPY_MIN) ->
     import bsdiff4.core
 
     tcontrol, bdiff, bextra = bsdiff4.core.diff(old, new)
-    ops: List[Op] = []
+    ops: list[Op] = []
     dpos = 0
     epos = 0
     for diff_len, extra_len, seek in tcontrol:
@@ -143,14 +147,14 @@ def _fold_add(block: bytes, copy_min: int) -> Iterator[Op]:
         yield Op(OP_ADD, n - start, block[start:n])
 
 
-def ops_literal(new: bytes) -> List[Op]:
+def ops_literal(new: bytes) -> list[Op]:
     """Op stream that ignores the old image entirely (baseline for benchmarks)"""
     return [Op(OP_LIT, len(new), new)] if new else []
 
 
-def chunk_ops(ops: Iterable[Op], old_size: int, new_size: int, chunk_bytes: int) -> List[bytes]:
+def chunk_ops(ops: Iterable[Op], old_size: int, new_size: int, chunk_bytes: int) -> list[bytes]:
     """Split a whole-image op stream into per-chunk encoded op streams honouring the chunk invariants"""
-    chunks: List[bytearray] = [bytearray() for _ in range((new_size + chunk_bytes - 1) // chunk_bytes)]
+    chunks: list[bytearray] = [bytearray() for _ in range((new_size + chunk_bytes - 1) // chunk_bytes)]
     new_pos = 0
     old_cursor = 0  # matcher's old cursor
     chunk_cursor = 0  # decoder's old cursor; reset to the chunk offset at every chunk start
@@ -246,8 +250,12 @@ def create(
     coder_id: int = coders.ID_LZSS,
     chunk_bytes: int = DEFAULT_CHUNK_BYTES,
     copy_min: int = DEFAULT_COPY_MIN,
-    ops: Optional[List[Op]] = None,
+    ops: list[Op] | None = None,
 ) -> bytes:
+    if not 0 < chunk_bytes <= MAX_CHUNK_BYTES:
+        raise SPatchError(f"chunk_bytes must be in 1..{MAX_CHUNK_BYTES} (flight DELTA_MAX_CHUNK_BYTES)")
+    if len(old) > MAX_IMAGE_SIZE or len(new) > MAX_IMAGE_SIZE:
+        raise SPatchError(f"images must not exceed {MAX_IMAGE_SIZE} bytes (flight DELTA_MAX_IMAGE_SIZE)")
     if ops is None:
         ops = ops_from_bsdiff(old, new, copy_min)
     header = Header(coder_id, len(old), crc32(old), len(new), crc32(new), chunk_bytes)
@@ -257,12 +265,14 @@ def create(
         start = index * chunk_bytes
         expected = new[start : start + chunk_bytes]
         coded = encode(raw)
+        if len(coded) > MAX_CODED_CHUNK_BYTES:
+            raise SPatchError(f"chunk {index} coded to {len(coded)} bytes, above flight DELTA_MAX_CODED_CHUNK_BYTES")
         out.extend(struct.pack("<II", len(coded), crc32(expected)))
         out.extend(coded)
     return bytes(out)
 
 
-def iter_chunks(patch: bytes, header: Header) -> Iterator[Tuple[int, int, bytes]]:
+def iter_chunks(patch: bytes, header: Header) -> Iterator[tuple[int, int, bytes]]:
     pos = HEADER_SIZE
     for _ in range(header.chunk_count):
         if pos + CHUNK_HEADER_SIZE > len(patch):

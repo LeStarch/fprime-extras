@@ -47,6 +47,11 @@ TEST(OffNominal, AbortIdle) {
     tester.abortIdle();
 }
 
+TEST(OffNominal, SameFile) {
+    Update::DeltaPatcherTester tester;
+    tester.sameFile();
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

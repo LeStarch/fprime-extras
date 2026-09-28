@@ -8,8 +8,6 @@ reference against which the flight decoders (FprimeExtras/Update/Delta/DeltaCode
 
 from __future__ import annotations
 
-from typing import Dict, List
-
 ID_NONE = 0
 ID_RLE = 1
 ID_LZSS = 2
@@ -103,8 +101,8 @@ def lzss_encode(data: bytes) -> bytes:
     out = bytearray()
     n = len(data)
     pos = 0
-    heads: Dict[bytes, List[int]] = {}
-    items: List[bytes] = []
+    heads: dict[bytes, list[int]] = {}
+    items: list[bytes] = []
     flags = 0
 
     def emit(flag: int, payload: bytes):

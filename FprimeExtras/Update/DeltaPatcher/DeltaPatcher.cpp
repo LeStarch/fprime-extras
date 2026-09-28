@@ -65,6 +65,13 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
         return;
     }
+    // The old image is never written: refuse aliased paths before any file is opened
+    if ((old_file == new_file) || (patch_file == new_file) || (old_file == patch_file)) {
+        this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::SAME_FILE);
+        this->tlmWrite_LastStatus(DeltaPatchStatus::SAME_FILE);
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
+        return;
+    }
     this->closeMedia();
     this->m_codec.reset();
 
@@ -108,6 +115,7 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
 
 void DeltaPatcher ::ABORT_PATCH_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
     if (this->m_state != DeltaPatchState::PATCHING) {
+        this->log_WARNING_LO_AbortIgnored(this->m_state);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
         return;
     }

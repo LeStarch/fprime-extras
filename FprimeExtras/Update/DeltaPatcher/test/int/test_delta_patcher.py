@@ -61,7 +61,9 @@ def send_and_await_error(fprime_test_api, args, timeout, command="APPLY_PATCH"):
 
 
 def uplink(fprime_test_api, local, remote):
-    assert fprime_test_api.uplink_file_and_await_completion(local, destination=remote, timeout=60)
+    assert fprime_test_api.uplink_file_and_await_completion(
+        local, destination=remote, timeout=60
+    )
 
 
 @pytest.fixture
@@ -87,20 +89,32 @@ def test_apply_patch_nominal(fprime_test_api, images):
     _old, new, _patch = images
     chunks = -(-len(new) // CHUNK_BYTES)
     fprime_test_api.send_and_assert_command(
-        patcher(fprime_test_api, "APPLY_PATCH"), [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=120
+        patcher(fprime_test_api, "APPLY_PATCH"),
+        [OLD_FILE, PATCH_FILE, NEW_FILE],
+        timeout=120,
     )
-    fprime_test_api.assert_event(patcher(fprime_test_api, "PatchStarted"), [PATCH_FILE, OLD_FILE, NEW_FILE, chunks])
     fprime_test_api.assert_event(
-        patcher(fprime_test_api, "PatchComplete"), [NEW_FILE, len(new), zlib.crc32(new) & 0xFFFFFFFF]
+        patcher(fprime_test_api, "PatchStarted"),
+        [PATCH_FILE, OLD_FILE, NEW_FILE, chunks],
+    )
+    fprime_test_api.assert_event(
+        patcher(fprime_test_api, "PatchComplete"),
+        [NEW_FILE, len(new), zlib.crc32(new) & 0xFFFFFFFF],
     )
     assert Path(NEW_FILE).read_bytes() == new
-    fprime_test_api.assert_telemetry(patcher(fprime_test_api, "State"), "COMPLETE", timeout=10)
-    fprime_test_api.assert_telemetry(patcher(fprime_test_api, "ChunksDone"), chunks, timeout=10)
+    fprime_test_api.assert_telemetry(
+        patcher(fprime_test_api, "State"), "COMPLETE", timeout=10
+    )
+    fprime_test_api.assert_telemetry(
+        patcher(fprime_test_api, "ChunksDone"), chunks, timeout=10
+    )
 
 
 def test_apply_patch_missing_old(fprime_test_api, images):
     """APPLY_PATCH against a missing old image fails with OPEN_FAILED and rejects the command."""
-    send_and_await_error(fprime_test_api, [f"{UPLINK_DIR}/missing.bin", PATCH_FILE, NEW_FILE], timeout=30)
+    send_and_await_error(
+        fprime_test_api, [f"{UPLINK_DIR}/missing.bin", PATCH_FILE, NEW_FILE], timeout=30
+    )
     fprime_test_api.assert_event(patcher(fprime_test_api, "PatchRejected"), None)
 
 
@@ -121,14 +135,18 @@ def test_apply_patch_corrupt_chunk_then_resume(fprime_test_api, images):
     send_and_await_error(fprime_test_api, [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=120)
     failure = predicates.is_a_member_of(["CHUNK_CRC", "BAD_OPCODE", "TRUNCATED"])
     fprime_test_api.assert_event(patcher(fprime_test_api, "ChunkFailed"), [1, failure])
-    fprime_test_api.assert_telemetry(patcher(fprime_test_api, "State"), "FAILED", timeout=10)
+    fprime_test_api.assert_telemetry(
+        patcher(fprime_test_api, "State"), "FAILED", timeout=10
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "u.spatch").write_bytes(patch)
         uplink(fprime_test_api, str(Path(tmp, "u.spatch")), PATCH_FILE)
     fprime_test_api.clear_histories()
     fprime_test_api.send_and_assert_command(
-        patcher(fprime_test_api, "APPLY_PATCH"), [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=120
+        patcher(fprime_test_api, "APPLY_PATCH"),
+        [OLD_FILE, PATCH_FILE, NEW_FILE],
+        timeout=120,
     )
     fprime_test_api.assert_event(patcher(fprime_test_api, "PatchResumed"), None)
     fprime_test_api.assert_event(patcher(fprime_test_api, "PatchComplete"), None)
@@ -148,14 +166,29 @@ def test_abort_in_progress_then_resume(fprime_test_api, images):
     apply_cmd = patcher(fprime_test_api, "APPLY_PATCH")
     apply_opcode = fprime_test_api.translate_command_name(apply_cmd)
     fprime_test_api.send_command(apply_cmd, [OLD_FILE, PATCH_FILE, NEW_FILE])
-    assert fprime_test_api.await_event(patcher(fprime_test_api, "PatchStarted"), timeout=10) is not None
-    fprime_test_api.send_and_assert_command(patcher(fprime_test_api, "ABORT_PATCH"), timeout=10)
-    fprime_test_api.assert_event(patcher(fprime_test_api, "PatchAborted"), None, timeout=10)
-    fprime_test_api.assert_event(f"{dispatcher}.OpCodeError", [apply_opcode, None], timeout=10)
-    fprime_test_api.assert_telemetry(patcher(fprime_test_api, "State"), "IDLE", timeout=10)
+    assert (
+        fprime_test_api.await_event(
+            patcher(fprime_test_api, "PatchStarted"), timeout=10
+        )
+        is not None
+    )
+    fprime_test_api.send_and_assert_command(
+        patcher(fprime_test_api, "ABORT_PATCH"), timeout=10
+    )
+    fprime_test_api.assert_event(
+        patcher(fprime_test_api, "PatchAborted"), None, timeout=10
+    )
+    fprime_test_api.assert_event(
+        f"{dispatcher}.OpCodeError", [apply_opcode, None], timeout=10
+    )
+    fprime_test_api.assert_telemetry(
+        patcher(fprime_test_api, "State"), "IDLE", timeout=10
+    )
     assert Path(NEW_FILE).read_bytes() != new
 
     fprime_test_api.clear_histories()
-    fprime_test_api.send_and_assert_command(apply_cmd, [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=120)
+    fprime_test_api.send_and_assert_command(
+        apply_cmd, [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=120
+    )
     fprime_test_api.assert_event(patcher(fprime_test_api, "PatchComplete"), None)
     assert Path(NEW_FILE).read_bytes() == new
