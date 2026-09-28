@@ -1,6 +1,0 @@
-2026-09-28T00:53:33.431113,(2(0)-1790556813:431113),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/old.bin
-2026-09-28T00:53:34.139671,(2(0)-1790556814:139671),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
-2026-09-28T00:53:35.143217,(2(0)-1790556815:143217),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
-2026-09-28T00:53:36.102740,(2(0)-1790556816:102740),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
-2026-09-28T00:53:37.048207,(2(0)-1790556817:48207),Update.deltaPatcher.PatchRejected,2684362754,EventSeverity.WARNING_HI,Patch rejected: CODER_MISMATCH
-2026-09-28T00:53:37.048243,(2(0)-1790556817:48243),CdhCore.cmdDisp.OpCodeError,16777219,EventSeverity.COMMAND,Opcode 0xa0002000 completed with error EXECUTION_ERROR

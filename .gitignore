@@ -43,3 +43,4 @@
 # Python
 __pycache__/
 *.egg-info/
+FprimeExtras/Update/DeltaPatcher/test/int/logs/
