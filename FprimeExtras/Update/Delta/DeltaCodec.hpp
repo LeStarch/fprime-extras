@@ -130,6 +130,7 @@ class DeltaCodec final {
         bool opActive;              //!< True while op has bytes remaining
         FwSizeType opRemaining;     //!< Output bytes remaining for op
         bool seekPending;           //!< A SEEK was parsed and must be followed by a producing op
+        FwSizeType opCount;         //!< Operations parsed in this chunk, capped at DELTA_MAX_OPS_PER_CHUNK
     };
 
     Status fail(Status status);

@@ -28,6 +28,9 @@ constexpr U32 DELTA_MAX_CHUNK_BYTES = 8192;
 //! Largest coded_len accepted for one chunk; bounds the patch bytes decoded in a single DeltaCodec::step()
 constexpr U32 DELTA_MAX_CODED_CHUNK_BYTES = 2 * DELTA_MAX_CHUNK_BYTES;
 
+//! Most operations (including SEEKs) accepted in one chunk; a valid chunk needs at most 2 per output byte
+constexpr U32 DELTA_MAX_OPS_PER_CHUNK = 2 * DELTA_MAX_CHUNK_BYTES;
+
 //! Largest old/new image size accepted from an SPatch header; bounds the storage consumed by the new image
 constexpr U32 DELTA_MAX_IMAGE_SIZE = 64u * 1024u * 1024u;
 

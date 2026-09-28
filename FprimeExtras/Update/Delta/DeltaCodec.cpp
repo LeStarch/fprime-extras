@@ -338,6 +338,7 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
     chunk.opActive = false;
     chunk.opRemaining = 0;
     chunk.seekPending = false;
+    chunk.opCount = 0;
 
     this->m_coder->reset();
     this->m_ring.reset();
@@ -444,6 +445,12 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
     }
     const U8 opByte = this->m_ring.peek(0);
     this->m_ring.pop(1 + operandLength);
+    // Explicit work bound: every producing op emits at least one byte and at most one SEEK precedes it
+    static_assert(DELTA_MAX_OPS_PER_CHUNK >= 2 * DELTA_MAX_CHUNK_BYTES, "Op cap must admit any valid chunk");
+    chunk.opCount++;
+    if (chunk.opCount > DELTA_MAX_OPS_PER_CHUNK) {
+        return BAD_OPCODE;
+    }
 
     switch (opByte) {
         case OP_SEEK: {

@@ -89,7 +89,8 @@ SEEK  0x03  svar d            old cursor += d              (zigzag)
 ```
 
 `uvar` is LEB128 (at most 5 bytes). Operations may not cross a chunk boundary; `n > 0`; a `SEEK` must be directly
-followed by `COPY`/`ADD`/`LIT` (two consecutive `SEEK`s are `BAD_OPCODE`). The old cursor resets to
+followed by `COPY`/`ADD`/`LIT` (two consecutive `SEEK`s are `BAD_OPCODE`); a chunk may hold at most
+`DELTA_MAX_OPS_PER_CHUNK` operations. The old cursor resets to
 `chunk_index * chunk_bytes` at each chunk start so chunks are independent.
 
 Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `Delta/DeltaCoder.hpp`).
@@ -149,6 +150,7 @@ possible without touching the patch payload.
 | `DELTA_VERIFY_BYTES_PER_STEP` | 4096 | CRC bytes per `run` tick during verification |
 | `DELTA_MAX_CHUNK_BYTES` | 8192 | Largest header `chunk_bytes` accepted; bounds output bytes per `run` tick |
 | `DELTA_MAX_CODED_CHUNK_BYTES` | 16384 | Largest `coded_len` accepted; bounds patch bytes decoded per tick |
+| `DELTA_MAX_OPS_PER_CHUNK` | 16384 | Most operations parsed per chunk; explicit per-tick work bound (2 per output byte suffices) |
 | `DELTA_MAX_IMAGE_SIZE` | 64 MiB | Largest old/new image accepted; bounds storage used by `new_file` |
 
 RAM (measured, x86-64): `DeltaCodec` 928 B + `DeltaCoderLzss` 32 B = 960 B. `Os::File` handles inside
