@@ -212,6 +212,8 @@ DeltaPatchStatus DeltaPatcher ::toStatus(DeltaCodec::Status status) {
             return DeltaPatchStatus::PATCH_SIZE_MISMATCH;
         case DeltaCodec::OUTPUT_STALE:
             return DeltaPatchStatus::OUTPUT_STALE;
+        case DeltaCodec::CODER_MISMATCH:
+            return DeltaPatchStatus::CODER_MISMATCH;
         default:
             FW_ASSERT(0, static_cast<FwAssertArgType>(status));
             return DeltaPatchStatus::BAD_OPCODE;

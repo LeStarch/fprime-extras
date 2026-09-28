@@ -75,6 +75,7 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
     // Header (little-endian): magic[4] version u8 coder u8 flags u8 reserved u8 | old_size u32 old_crc u32
     //                         new_size u32 new_crc u32 chunk_bytes u32 header_crc u32
     static_assert(DELTA_PATCH_BUFFER_SIZE >= HEADER_SIZE, "Patch buffer must hold the SPatch header");
+    static_assert(DELTA_RING_SIZE >= DeltaCoderLzss::WINDOW, "DELTA_RING_SIZE must cover the default LZSS window");
     if (patch.size(this->m_patchSize) != DeltaMedia::OP_OK) {
         return this->fail(READ_ERROR);
     }
@@ -90,17 +91,21 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
             return this->fail(BAD_HEADER);
         }
     }
-    if (header[4] != VERSION || header[5] != this->m_coder->id() || header[6] != 0 || header[7] != 0) {
+    if (header[HDR_VERSION] != VERSION || header[HDR_FLAGS] != 0 || header[HDR_RESERVED] != 0) {
         return this->fail(BAD_HEADER);
     }
-    if (crcFinal(crcUpdate(crcInit(), header, HEADER_SIZE - sizeof(U32))) != readU32(header + 28)) {
+    if (crcFinal(crcUpdate(crcInit(), header, HDR_CRC)) != readU32(header + HDR_CRC)) {
         return this->fail(BAD_HEADER);
     }
-    this->m_oldSize = readU32(header + 8);
-    this->m_oldCrc = readU32(header + 12);
-    this->m_newSize = readU32(header + 16);
-    this->m_newCrc = readU32(header + 20);
-    this->m_chunkBytes = readU32(header + 24);
+    // Header is intact: a coder id mismatch is a ground/flight configuration disagreement, not corruption
+    if (header[HDR_CODER] != this->m_coder->id()) {
+        return this->fail(CODER_MISMATCH);
+    }
+    this->m_oldSize = readU32(header + HDR_OLD_SIZE);
+    this->m_oldCrc = readU32(header + HDR_OLD_CRC);
+    this->m_newSize = readU32(header + HDR_NEW_SIZE);
+    this->m_newCrc = readU32(header + HDR_NEW_CRC);
+    this->m_chunkBytes = readU32(header + HDR_CHUNK_BYTES);
     if (this->m_chunkBytes == 0 || this->m_chunkBytes > DELTA_MAX_CHUNK_BYTES ||
         this->m_oldSize > DELTA_MAX_IMAGE_SIZE || this->m_newSize > DELTA_MAX_IMAGE_SIZE) {
         return this->fail(BAD_HEADER);

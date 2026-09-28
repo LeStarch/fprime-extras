@@ -1,0 +1,37 @@
+2026-09-28T00:47:37.379774,(2(0)-1790556457:379774),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/old.bin
+2026-09-28T00:47:38.186579,(2(0)-1790556458:186579),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
+2026-09-28T00:47:39.144899,(2(0)-1790556459:144899),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
+2026-09-28T00:47:40.061330,(2(0)-1790556460:61330),Update.deltaPatcher.PatchStarted,2684362752,EventSeverity.ACTIVITY_HI,Patch /tmp/uplink/u.spatch : /tmp/uplink/old.bin -> /tmp/uplink/new.bin started, 12 chunks
+2026-09-28T00:47:55.061256,(2(0)-1790556475:61256),Update.deltaPatcher.PatchComplete,2684362757,EventSeverity.ACTIVITY_HI,Patch complete: /tmp/uplink/new.bin (12225 bytes, crc 4cb9a0db)
+2026-09-28T00:47:55.061311,(2(0)-1790556475:61311),CdhCore.cmdDisp.OpCodeCompleted,16777218,EventSeverity.COMMAND,Opcode 0xa0002000 completed
+2026-09-28T00:47:56.716674,(2(0)-1790556476:716674),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/old.bin
+2026-09-28T00:47:57.124482,(2(0)-1790556477:124482),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
+2026-09-28T00:47:58.083819,(2(0)-1790556478:83819),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
+2026-09-28T00:47:59.061369,(2(0)-1790556479:61369),Update.deltaPatcher.PatchRejected,2684362754,EventSeverity.WARNING_HI,Patch rejected: OPEN_FAILED
+2026-09-28T00:47:59.061561,(2(0)-1790556479:61561),CdhCore.cmdDisp.OpCodeError,16777219,EventSeverity.COMMAND,Opcode 0xa0002000 completed with error EXECUTION_ERROR
+2026-09-28T00:48:00.630698,(2(0)-1790556480:630698),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/old.bin
+2026-09-28T00:48:01.137298,(2(0)-1790556481:137298),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
+2026-09-28T00:48:02.141438,(2(0)-1790556482:141438),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
+2026-09-28T00:48:03.099698,(2(0)-1790556483:99698),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
+2026-09-28T00:48:04.061245,(2(0)-1790556484:61245),Update.deltaPatcher.PatchStarted,2684362752,EventSeverity.ACTIVITY_HI,Patch /tmp/uplink/u.spatch : /tmp/uplink/old.bin -> /tmp/uplink/new.bin started, 12 chunks
+2026-09-28T00:48:08.061330,(2(0)-1790556488:61330),Update.deltaPatcher.ChunkFailed,2684362756,EventSeverity.WARNING_HI,Chunk 1 failed: BAD_OPCODE
+2026-09-28T00:48:08.061375,(2(0)-1790556488:61375),CdhCore.cmdDisp.OpCodeError,16777219,EventSeverity.COMMAND,Opcode 0xa0002000 completed with error EXECUTION_ERROR
+2026-09-28T00:48:09.153761,(2(0)-1790556489:153761),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
+2026-09-28T00:48:10.111516,(2(0)-1790556490:111516),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
+2026-09-28T00:48:11.061269,(2(0)-1790556491:61269),Update.deltaPatcher.PatchStarted,2684362752,EventSeverity.ACTIVITY_HI,Patch /tmp/uplink/u.spatch : /tmp/uplink/old.bin -> /tmp/uplink/new.bin started, 12 chunks
+2026-09-28T00:48:14.061274,(2(0)-1790556494:61274),Update.deltaPatcher.PatchResumed,2684362753,EventSeverity.ACTIVITY_HI,Resuming /tmp/uplink/new.bin at chunk 1 of 12
+2026-09-28T00:48:26.061111,(2(0)-1790556506:61111),Update.deltaPatcher.PatchComplete,2684362757,EventSeverity.ACTIVITY_HI,Patch complete: /tmp/uplink/new.bin (12225 bytes, crc 4cb9a0db)
+2026-09-28T00:48:26.061160,(2(0)-1790556506:61160),CdhCore.cmdDisp.OpCodeCompleted,16777218,EventSeverity.COMMAND,Opcode 0xa0002000 completed
+2026-09-28T00:48:27.141210,(2(0)-1790556507:141210),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002001 dispatched to port 24
+2026-09-28T00:48:28.061070,(2(0)-1790556508:61070),Update.deltaPatcher.AbortIgnored,2684362759,EventSeverity.WARNING_LO,ABORT_PATCH ignored: patcher state is COMPLETE
+2026-09-28T00:48:28.061104,(2(0)-1790556508:61104),CdhCore.cmdDisp.OpCodeError,16777219,EventSeverity.COMMAND,Opcode 0xa0002001 completed with error VALIDATION_ERROR
+2026-09-28T00:48:29.684129,(2(0)-1790556509:684129),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/old.bin
+2026-09-28T00:48:30.200714,(2(0)-1790556510:200714),FileHandling.fileUplink.FileReceived,83886082,EventSeverity.ACTIVITY_HI,Received file /tmp/uplink/u.spatch
+2026-09-28T00:48:31.164756,(2(0)-1790556511:164756),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
+2026-09-28T00:48:32.061080,(2(0)-1790556512:61080),Update.deltaPatcher.PatchStarted,2684362752,EventSeverity.ACTIVITY_HI,Patch /tmp/uplink/u.spatch : /tmp/uplink/old.bin -> /tmp/uplink/new.bin started, 12 chunks
+2026-09-28T00:48:33.172676,(2(0)-1790556513:172676),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002001 dispatched to port 24
+2026-09-28T00:48:34.061116,(2(0)-1790556514:61116),Update.deltaPatcher.PatchAborted,2684362758,EventSeverity.ACTIVITY_HI,Patch aborted at chunk 0
+2026-09-28T00:48:34.061223,(2(0)-1790556514:61223),CdhCore.cmdDisp.OpCodeError,16777219,EventSeverity.COMMAND,Opcode 0xa0002000 completed with error EXECUTION_ERROR
+2026-09-28T00:48:34.061230,(2(0)-1790556514:61230),CdhCore.cmdDisp.OpCodeCompleted,16777218,EventSeverity.COMMAND,Opcode 0xa0002001 completed
+2026-09-28T00:48:35.084403,(2(0)-1790556515:84403),CdhCore.cmdDisp.OpCodeDispatched,16777217,EventSeverity.COMMAND,Opcode 0xa0002000 dispatched to port 24
+2026-09-28T00:48:36.061107,(2(0)-1790556516:61107),Update.deltaPatcher.PatchStarted,2684362752,EventSeverity.ACTIVITY_HI,Patch /tmp/uplink/u.spatch : /tmp/uplink/old.bin -> /tmp/uplink/new.bin started, 12 chunks

@@ -16,7 +16,8 @@ namespace Update {
 //!
 //! A DeltaCoder pushes decoded bytes into the ring and the DeltaCodec consumes them. The ring doubles as the
 //! coder's history window: bytes remain addressable via history() after they are consumed, until overwritten by
-//! subsequent pushes. Thus a window-based coder (e.g. LZSS) needs no window storage of its own.
+//! subsequent pushes. Thus a window-based coder (e.g. LZSS) needs no window storage of its own. This
+//! consumed-but-addressable history is why Types::CircularBuffer is not used: it releases bytes on deserialize.
 class DeltaRing {
   public:
     //! Construct a ring over externally owned storage

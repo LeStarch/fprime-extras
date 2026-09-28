@@ -19,7 +19,7 @@ module Update {
         OP_OK,              @< Success
         BUSY,               @< Another patch is in progress
         OPEN_FAILED,        @< Could not open old/patch/new file
-        BAD_HEADER,         @< Magic/version/coder id/CRC mismatch in SPatch header
+        BAD_HEADER,         @< Magic/version/flags/CRC/geometry invalid in SPatch header
         OLD_IMAGE_MISMATCH, @< Old image size or CRC differs from header
         TRUNCATED,          @< Patch ended before the declared output was produced
         CHUNK_CRC,          @< Chunk output CRC failed
@@ -30,7 +30,8 @@ module Update {
         PATCH_SIZE_MISMATCH, @< Patch file has trailing bytes after the final chunk
         OUTPUT_STALE,       @< Existing new file is larger than the header's new size
         ABORTED,            @< Operator abort
-        SAME_FILE           @< old_file, patch_file and new_file must be distinct
+        SAME_FILE,          @< old_file, patch_file and new_file must be distinct
+        CODER_MISMATCH      @< Valid header names a coder other than the one installed in flight
     }
 
     @ State of the DeltaPatcher

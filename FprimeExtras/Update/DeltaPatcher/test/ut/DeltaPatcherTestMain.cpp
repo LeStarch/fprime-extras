@@ -32,6 +32,11 @@ TEST(OffNominal, BadHeader) {
     tester.badHeader();
 }
 
+TEST(OffNominal, CoderMismatch) {
+    Update::DeltaPatcherTester tester;
+    tester.coderMismatch();
+}
+
 TEST(OffNominal, OldImageMismatch) {
     Update::DeltaPatcherTester tester;
     tester.oldImageMismatch();

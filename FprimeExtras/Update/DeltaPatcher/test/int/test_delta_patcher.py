@@ -9,7 +9,9 @@ generates a synthetic old/new image pair, builds an SPatch with the fprime-extra
 the old image and the patch, commands APPLY_PATCH, and verifies the produced image on the local filesystem
 (the GDS and flight software run on the same host in this test configuration).
 
-The instance is resolved through the integration config key "Update.DeltaPatcher".
+The instance is resolved through the integration config key "Update.DeltaPatcher", e.g.
+
+    pytest --dictionary <deployment>/dict/*TopologyDictionary.json --deployment-config <deployment>/test/int/int_config.json
 
 @author Michael Starch
 @copyright Michael Starch, 2025
@@ -116,6 +118,25 @@ def test_apply_patch_missing_old(fprime_test_api, images):
         fprime_test_api, [f"{UPLINK_DIR}/missing.bin", PATCH_FILE, NEW_FILE], timeout=30
     )
     fprime_test_api.assert_event(patcher(fprime_test_api, "PatchRejected"), None)
+
+
+def test_apply_patch_coder_mismatch(fprime_test_api, images):
+    """A valid patch built for a coder other than the installed one is rejected with CODER_MISMATCH."""
+    old, new, _patch = images
+    rle = spatch.create(old, new, coder_id=coders.ID_RLE, chunk_bytes=CHUNK_BYTES)
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "u.spatch").write_bytes(rle)
+        uplink(fprime_test_api, str(Path(tmp, "u.spatch")), PATCH_FILE)
+    fprime_test_api.clear_histories()
+    send_and_await_error(fprime_test_api, [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=30)
+    fprime_test_api.assert_event(
+        patcher(fprime_test_api, "PatchRejected"), ["CODER_MISMATCH"]
+    )
+    started = fprime_test_api.get_event_pred(patcher(fprime_test_api, "PatchStarted"))
+    assert not any(
+        started(e) for e in fprime_test_api.get_event_test_history().retrieve()
+    )
+    assert not Path(NEW_FILE).exists() or Path(NEW_FILE).stat().st_size == 0
 
 
 def test_apply_patch_corrupt_chunk_then_resume(fprime_test_api, images):

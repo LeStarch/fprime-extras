@@ -1,0 +1,8 @@
+2026-09-28T00:41:13.095086,(2(0)-1790556073:95086),Update.deltaPatcher.APPLY_PATCH,2684362752,['/tmp/uplink/old.bin', '/tmp/uplink/u.spatch', '/tmp/uplink/new.bin']
+2026-09-28T00:41:32.127568,(2(0)-1790556092:127568),Update.deltaPatcher.APPLY_PATCH,2684362752,['/tmp/uplink/missing.bin', '/tmp/uplink/u.spatch', '/tmp/uplink/new.bin']
+2026-09-28T00:41:37.142390,(2(0)-1790556097:142390),Update.deltaPatcher.APPLY_PATCH,2684362752,['/tmp/uplink/old.bin', '/tmp/uplink/u.spatch', '/tmp/uplink/new.bin']
+2026-09-28T00:41:44.155051,(2(0)-1790556104:155051),Update.deltaPatcher.APPLY_PATCH,2684362752,['/tmp/uplink/old.bin', '/tmp/uplink/u.spatch', '/tmp/uplink/new.bin']
+2026-09-28T00:42:01.082614,(2(0)-1790556121:82614),Update.deltaPatcher.ABORT_PATCH,2684362753,[]
+2026-09-28T00:42:05.094247,(2(0)-1790556125:94247),Update.deltaPatcher.APPLY_PATCH,2684362752,['/tmp/uplink/old.bin', '/tmp/uplink/u.spatch', '/tmp/uplink/new.bin']
+2026-09-28T00:42:07.097887,(2(0)-1790556127:97887),Update.deltaPatcher.ABORT_PATCH,2684362753,[]
+2026-09-28T00:42:10.107014,(2(0)-1790556130:107014),Update.deltaPatcher.APPLY_PATCH,2684362752,['/tmp/uplink/old.bin', '/tmp/uplink/u.spatch', '/tmp/uplink/new.bin']

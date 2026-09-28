@@ -1,0 +1,3 @@
+[2026-09-28 00:51:58,494] [INFO] root: Logging system initialized!
+[2026-09-28 00:51:58,513] [INFO] transport: Outgoing connecting to: ipc:///tmp/fprime-server-in-ubuntu
+[2026-09-28 00:51:58,513] [INFO] transport: Incoming connecting to: ipc:///tmp/fprime-server-out-ubuntu

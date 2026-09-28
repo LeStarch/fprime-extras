@@ -171,6 +171,19 @@ void DeltaPatcherTester ::badHeader() {
   ASSERT_EVENTS_PatchStarted_SIZE(0);
 }
 
+void DeltaPatcherTester ::coderMismatch() {
+  // Valid RLE patch presented to the default LZSS coder
+  writeFile(this->m_patch, PATCH_RLE, PATCH_RLE_SIZE);
+  this->apply(1);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::CODER_MISMATCH);
+  ASSERT_TLM_LastStatus(this->tlmHistory_LastStatus->size() - 1,
+                        DeltaPatchStatus::CODER_MISMATCH);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::EXECUTION_ERROR);
+  ASSERT_EVENTS_PatchStarted_SIZE(0);
+}
+
 void DeltaPatcherTester ::oldImageMismatch() {
   std::vector<U8> old(OLD_IMAGE, OLD_IMAGE + OLD_IMAGE_SIZE);
   old[OLD_IMAGE_SIZE / 2] ^= 0x01;

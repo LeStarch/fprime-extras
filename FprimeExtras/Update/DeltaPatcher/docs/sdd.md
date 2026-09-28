@@ -53,7 +53,9 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 * **Abort.** `ABORT_PATCH` closes the media, responds `EXECUTION_ERROR` to the pending `APPLY_PATCH`, emits
   `PatchAborted` and leaves `new_file` in place. When idle it emits `AbortIgnored` and responds `VALIDATION_ERROR`.
 * **Coder seam.** `DeltaPatcher::setCoder(DeltaCoder&)` (call before the topology starts) substitutes a
-  project-supplied decompressor. The coder id in the SPatch header must match the installed coder.
+  project-supplied decompressor. The coder id in the SPatch header must match the installed coder; an otherwise
+  valid header naming a different coder is rejected with `CODER_MISMATCH` (distinct from `BAD_HEADER`, which
+  indicates corruption or an out-of-range geometry).
 
 ### SPatch v1 container
 

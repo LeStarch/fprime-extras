@@ -38,7 +38,8 @@ class DeltaCodec final {
         WRITE_ERROR,          //!< Media write failed
         NEW_IMAGE_MISMATCH,   //!< Final new image CRC differs from the header
         PATCH_SIZE_MISMATCH,  //!< Patch has bytes beyond the last chunk
-        OUTPUT_STALE          //!< Existing new image is larger than the target; caller must recreate it
+        OUTPUT_STALE,         //!< Existing new image is larger than the target; caller must recreate it
+        CODER_MISMATCH        //!< Header is valid but names a coder other than the installed one
     };
 
     //! Engine state
@@ -55,6 +56,17 @@ class DeltaCodec final {
     static constexpr FwSizeType HEADER_SIZE = 32;
     static constexpr FwSizeType CHUNK_HEADER_SIZE = 8;
     static constexpr U8 VERSION = 1;
+    // Header field offsets
+    static constexpr FwSizeType HDR_VERSION = 4;
+    static constexpr FwSizeType HDR_CODER = 5;
+    static constexpr FwSizeType HDR_FLAGS = 6;
+    static constexpr FwSizeType HDR_RESERVED = 7;
+    static constexpr FwSizeType HDR_OLD_SIZE = 8;
+    static constexpr FwSizeType HDR_OLD_CRC = 12;
+    static constexpr FwSizeType HDR_NEW_SIZE = 16;
+    static constexpr FwSizeType HDR_NEW_CRC = 20;
+    static constexpr FwSizeType HDR_CHUNK_BYTES = 24;
+    static constexpr FwSizeType HDR_CRC = 28;  //!< CRC32 of header[0:HDR_CRC]
 
     //! Construct an engine using the supplied coder
     explicit DeltaCodec(DeltaCoder& coder);

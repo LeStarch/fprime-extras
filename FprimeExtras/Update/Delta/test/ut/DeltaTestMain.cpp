@@ -381,8 +381,7 @@ TEST(DeltaCodec, RejectsBadHeader) {
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
-  patch[5] = DeltaCoder::ID_LZSS; // coder mismatch (also fails CRC, but coder
-                                  // is checked first)
+  patch[5] = DeltaCoder::ID_LZSS; // coder byte changed without CRC update: corruption, not mismatch
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
@@ -393,9 +392,9 @@ TEST(DeltaCodec, RejectsBadHeader) {
   patch.resize(DeltaCodec::HEADER_SIZE - 1);
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::TRUNCATED);
 
-  // Wrong coder instance for a valid patch
+  // Wrong coder instance for a valid patch: header intact, so a configuration mismatch is reported
   DeltaCoderLzss lzss;
-  EXPECT_EQ(applyPatch(lzss, good, oldImage, state), DeltaCodec::BAD_HEADER);
+  EXPECT_EQ(applyPatch(lzss, good, oldImage, state), DeltaCodec::CODER_MISMATCH);
   EXPECT_EQ(state, DeltaCodec::FAILED);
 }
 

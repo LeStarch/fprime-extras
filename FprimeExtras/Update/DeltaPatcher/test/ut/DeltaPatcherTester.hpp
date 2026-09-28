@@ -61,6 +61,9 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Corrupt header is rejected BAD_HEADER at command time
     void badHeader();
 
+    //! Valid patch for a different coder is rejected CODER_MISMATCH at command time
+    void coderMismatch();
+
     //! Wrong old image reports OldImageMismatch
     void oldImageMismatch();
 
