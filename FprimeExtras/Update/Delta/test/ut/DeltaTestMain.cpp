@@ -25,8 +25,8 @@ using namespace Update;
 class MemoryMedia final : public DeltaMedia {
 public:
   explicit MemoryMedia(const U8 *data = nullptr, FwSizeType size = 0)
-      : data(data, data + size), failReads(false), failWrites(false), reads(0),
-        writes(0) {}
+      : data(data, data + size), failReads(false), failWrites(false),
+        failFlush(false), corruptStored(false), reads(0), writes(0), flushes(0) {}
 
   Status size(FwSizeType &size) override {
     size = this->data.size();
@@ -57,14 +57,25 @@ public:
     for (FwSizeType i = 0; i < length; i++) {
       this->data[offset + i] = buffer[i];
     }
+    if (this->corruptStored) {
+      // Storage accepts the write but keeps a flipped bit: only read-back can catch this
+      this->data[offset] ^= 0x01;
+    }
     return OP_OK;
+  }
+  Status flush() override {
+    this->flushes++;
+    return this->failFlush ? IO_ERROR : OP_OK;
   }
 
   std::vector<U8> data;
   bool failReads;
   bool failWrites;
+  bool failFlush;
+  bool corruptStored;
   U32 reads;
   U32 writes;
+  U32 flushes;
 };
 
 static std::vector<U8> toVector(const U8 *data, FwSizeType size) {
@@ -260,8 +271,9 @@ static void applyNominal(DeltaCoder &coder, const U8 *patch,
   EXPECT_EQ(codec.resumedChunks(), 0u);
   EXPECT_EQ(codec.bytesWritten(), TestVectors::NEW_IMAGE_SIZE);
   // One step verifies the old image (2000 B < 4096 B budget), one per chunk,
-  // one to finish
-  EXPECT_EQ(steps, 1u + expectedChunks + 1u);
+  // one to finish (flush), one to read the new image back (< 4096 B)
+  EXPECT_EQ(steps, 1u + expectedChunks + 1u + 1u);
+  EXPECT_EQ(newMedia.flushes, 1u);
   EXPECT_EQ(newMedia.data,
             toVector(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE));
 }
@@ -596,6 +608,64 @@ TEST(DeltaCodec, RejectsOutOfRangeOperands) {
   EXPECT_EQ(newMedia.data, rotated);
 }
 
+TEST(DeltaCodec, RejectsConsecutiveSeeks) {
+  // REQ: per-step work is bounded by configuration, not patch content. A SEEK
+  // produces no output, so a chunk of back-to-back SEEKs (cheap to encode,
+  // expensive to decode once a coder expands it) must be rejected at the
+  // second SEEK rather than run to exhaustion of the coded payload.
+  const FwSizeType oldSize = 100;
+  const std::vector<U8> oldImage = pseudoRandom(oldSize, 11);
+  DeltaCodec::State state;
+
+  // Two literal SEEKs with the None coder: a valid encoder folds these into one
+  DeltaCoderNone none;
+  std::vector<U8> ops;
+  putSeek(ops, 1);
+  putSeek(ops, -1);
+  putCopy(ops, oldSize);
+  EXPECT_EQ(applyPatch(none, buildNonePatch(oldImage, oldImage, oldSize, {ops}),
+                       oldImage, state),
+            DeltaCodec::BAD_OPCODE);
+  EXPECT_EQ(state, DeltaCodec::FAILED);
+
+  // LZSS flood: literal "SEEK 0" then maximal overlapping matches expand a
+  // 16 KiB coded chunk toward ~2 MiB of SEEKs; the patch media counts reads to
+  // show the rejection happens after the first fill, not after the whole chunk
+  DeltaCoderLzss lzss;
+  std::vector<U8> coded;
+  coded.push_back(0x40);  // flags: literal, literal, then six matches
+  coded.push_back(0x03);  // SEEK
+  coded.push_back(0x00);  // delta 0
+  for (int i = 0; i < 6; i++) {
+    coded.push_back(1);    // distance 2
+    coded.push_back(255);  // length 258
+  }
+  while (coded.size() + 17 <= DELTA_MAX_CODED_CHUNK_BYTES) {
+    coded.push_back(0x00);  // flags: eight matches
+    for (int i = 0; i < 8; i++) {
+      coded.push_back(1);
+      coded.push_back(255);
+    }
+  }
+  std::vector<U8> patch = buildNonePatch(oldImage, oldImage, oldSize, {coded});
+  patch[5] = DeltaCoder::ID_LZSS;
+  const U32 headerCrc = crcOf(patch.data(), DeltaCodec::HDR_CRC);
+  for (FwSizeType i = 0; i < 4; i++) {
+    patch[DeltaCodec::HDR_CRC + i] = static_cast<U8>(headerCrc >> (8 * i));
+  }
+  MemoryMedia oldMedia(oldImage.data(), oldImage.size());
+  MemoryMedia patchMedia(patch.data(), patch.size());
+  MemoryMedia newMedia;
+  DeltaCodec codec(lzss);
+  ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+  const U32 readsBefore = patchMedia.reads;
+  U32 steps = 0;
+  EXPECT_EQ(run(codec, steps), DeltaCodec::BAD_OPCODE);
+  EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+  // Rejection at the second SEEK needs a single patch-buffer fill of the chunk
+  EXPECT_LE(patchMedia.reads - readsBefore, 2u);
+}
+
 TEST(DeltaCodec, VerifySpansSteps) {
   // REQ: verification work is bounded per step; partial-chunk CRC state carries
   // across steps and a corrupt chunk that straddles a step boundary is
@@ -647,7 +717,9 @@ TEST(DeltaCodec, VerifySpansSteps) {
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
   EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
-  EXPECT_EQ(steps, 3u + 1u); // chunks 1..3 re-applied, then finish
+  // chunks 1..3 re-applied, finish (flush), then ceil(10000/4096) = 3 read-back
+  // steps
+  EXPECT_EQ(steps, 3u + 1u + 3u);
   EXPECT_EQ(codec.resumedChunks(), 1u);
   EXPECT_EQ(codec.bytesWritten(),
             imageSize); // total verified output, including the resumed chunk
@@ -757,6 +829,53 @@ TEST(DeltaCodec, MediaErrors) {
     ASSERT_EQ(codec.step(), DeltaCodec::OP_OK); // old verify
     patchMedia.failReads = true;
     EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR);
+  }
+}
+
+TEST(DeltaCodec, ReadBackCatchesStorageFaults) {
+  // REQ: DP-005/DP-008. COMPLETE is reported only after the stored new image
+  // has been flushed, read back and CRC-checked; a media that acknowledges a
+  // write but stores it wrong, or that cannot flush, must fail the patch.
+  DeltaCoderNone coder;
+  {
+    MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+    MemoryMedia patchMedia(TestVectors::PATCH_NONE,
+                           TestVectors::PATCH_NONE_SIZE);
+    MemoryMedia newMedia;
+    newMedia.corruptStored = true;
+    DeltaCodec codec(coder);
+    ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+    U32 steps = 0;
+    EXPECT_EQ(run(codec, steps), DeltaCodec::NEW_IMAGE_MISMATCH);
+    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+    EXPECT_EQ(newMedia.flushes, 1u);
+  }
+  {
+    MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+    MemoryMedia patchMedia(TestVectors::PATCH_NONE,
+                           TestVectors::PATCH_NONE_SIZE);
+    MemoryMedia newMedia;
+    newMedia.failFlush = true;
+    DeltaCodec codec(coder);
+    ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+    U32 steps = 0;
+    EXPECT_EQ(run(codec, steps), DeltaCodec::WRITE_ERROR);
+    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+  }
+  {
+    // Read failure during the read-back pass is a READ_ERROR
+    MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+    MemoryMedia patchMedia(TestVectors::PATCH_NONE,
+                           TestVectors::PATCH_NONE_SIZE);
+    MemoryMedia newMedia;
+    DeltaCodec codec(coder);
+    ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+    while (codec.state() != DeltaCodec::VERIFY_FINAL) {
+      ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
+    }
+    newMedia.failReads = true;
+    EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR);
+    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
   }
 }
 

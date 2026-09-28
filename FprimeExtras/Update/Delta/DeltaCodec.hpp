@@ -17,13 +17,16 @@ namespace Update {
 
 //! \brief Allocation-free, bounded-step SPatch v1 engine
 //!
-//! Applies an SPatch (format: FprimeExtras/Update/DeltaPatcher/docs/sdd.md) held in `patch` media to the `oldImage` media producing the
-//! `newImage` media. Work is performed in step() calls, each bounded to one chunk (or DELTA_VERIFY_BYTES_PER_STEP
-//! bytes of CRC verification), so the engine may be driven from a rate group. All storage is fixed: three buffers
-//! sized by DeltaCodecConfig.hpp plus scalar state.
+//! Applies an SPatch (format: FprimeExtras/Update/DeltaPatcher/docs/sdd.md) held in `patch` media to the `oldImage`
+//! media producing the `newImage` media. Work is performed in step() calls, each bounded to one chunk (or
+//! DELTA_VERIFY_BYTES_PER_STEP bytes of CRC verification), so the engine may be driven from a rate group. All storage
+//! is fixed: three buffers sized by DeltaCodecConfig.hpp plus scalar state.
 //!
 //! Resume: chunks already present in the new image media are CRC-verified and skipped, so an interrupted patch
 //! restarts from the first missing or corrupt chunk with no persisted engine state.
+//!
+//! Completion: after the last chunk the new image media is flushed and read back in full; COMPLETE is reached only
+//! when the stored size and CRC match the header.
 class DeltaCodec final {
   public:
     //! Outcome of begin()/step(); mirrors Update.DeltaPatchStatus
@@ -48,6 +51,7 @@ class DeltaCodec final {
         VERIFY_NEW,  //!< Verifying chunks already present in the new image (resume)
         VERIFY_OLD,  //!< Verifying the old image CRC
         PATCHING,
+        VERIFY_FINAL,  //!< Reading the flushed new image back and checking its CRC before reporting COMPLETE
         COMPLETE,
         FAILED
     };
@@ -67,6 +71,11 @@ class DeltaCodec final {
     static constexpr FwSizeType HDR_NEW_CRC = 20;
     static constexpr FwSizeType HDR_CHUNK_BYTES = 24;
     static constexpr FwSizeType HDR_CRC = 28;  //!< CRC32 of header[0:HDR_CRC]
+    static_assert(HDR_CRC + sizeof(U32) == HEADER_SIZE, "SPatch header layout");
+    // Chunk header field offsets
+    static constexpr FwSizeType CHUNK_HDR_CODED_LENGTH = 0;
+    static constexpr FwSizeType CHUNK_HDR_CRC = 4;  //!< CRC32 of the chunk's decoded output
+    static_assert(CHUNK_HDR_CRC + sizeof(U32) == CHUNK_HEADER_SIZE, "SPatch chunk header layout");
 
     //! Construct an engine using the supplied coder
     explicit DeltaCodec(DeltaCoder& coder);
@@ -120,6 +129,7 @@ class DeltaCodec final {
         Op op;                      //!< Operation in progress
         bool opActive;              //!< True while op has bytes remaining
         FwSizeType opRemaining;     //!< Output bytes remaining for op
+        bool seekPending;           //!< A SEEK was parsed and must be followed by a producing op
     };
 
     Status fail(Status status);
@@ -128,6 +138,7 @@ class DeltaCodec final {
     Status verifyOldStep();
     Status patchChunk();
     Status finish();
+    Status verifyFinalStep();
     Status fillRing(Chunk& chunk);
     Status parseOp(Chunk& chunk);
     Status executeOp(Chunk& chunk);

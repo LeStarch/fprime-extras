@@ -168,6 +168,7 @@ void DeltaPatcher ::stepPatch() {
         case DeltaCodec::IDLE:
         case DeltaCodec::VERIFY_NEW:
         case DeltaCodec::VERIFY_OLD:
+        case DeltaCodec::VERIFY_FINAL:
         default:
             break;
     }

@@ -27,6 +27,9 @@ class DeltaRing {
         FW_ASSERT(capacity > 0);
     }
 
+    DeltaRing(const DeltaRing&) = delete;
+    DeltaRing& operator=(const DeltaRing&) = delete;
+
     //! Discard all content and zero the history so that references before the stream start are deterministic
     void reset() {
         for (FwSizeType i = 0; i < this->m_capacity; i++) {

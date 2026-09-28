@@ -109,4 +109,11 @@ DeltaMedia::Status DeltaFileMedia::write(FwSizeType offset, const U8* buffer, Fw
     return OP_OK;
 }
 
+DeltaMedia::Status DeltaFileMedia::flush() {
+    if (!this->m_writable) {
+        return OP_OK;
+    }
+    return (this->m_writer.flush() == Os::File::OP_OK) ? OP_OK : IO_ERROR;
+}
+
 }  // namespace Update

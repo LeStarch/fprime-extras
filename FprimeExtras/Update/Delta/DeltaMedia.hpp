@@ -36,6 +36,9 @@ class DeltaMedia {
 
     //! Write exactly `length` bytes from `buffer` at `offset`, extending the media as needed
     virtual Status write(FwSizeType offset, const U8* buffer, FwSizeType length) = 0;
+
+    //! Commit written bytes to storage so subsequent reads observe them; OP_OK when nothing is buffered
+    virtual Status flush() = 0;
 };
 
 //! \brief DeltaMedia backed by Os::File
@@ -65,6 +68,7 @@ class DeltaFileMedia final : public DeltaMedia {
     Status size(FwSizeType& size) override;
     Status read(FwSizeType offset, U8* buffer, FwSizeType length) override;
     Status write(FwSizeType offset, const U8* buffer, FwSizeType length) override;
+    Status flush() override;
 
   private:
     Os::File m_reader;

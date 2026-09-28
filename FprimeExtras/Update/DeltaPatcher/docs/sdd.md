@@ -13,7 +13,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 | DP-002 | The component shall never write to `old_file`. | Inspection (`READ_ONLY` media) |
 | DP-003 | Fixed codec state shall not exceed 1 KB with default configuration. | UT `RamBudget` |
 | DP-004 | All work shall occur in bounded steps driven by `run` (a rate group); no thread is created. | Inspection, UT |
-| DP-005 | The old image, each chunk's output, and the completed new image shall be CRC32-verified. | UT |
+| DP-005 | The old image, each chunk's output, and the completed new image (flushed and read back from the media) shall be CRC32-verified. | UT |
 | DP-006 | An interrupted or failed patch shall resume at the last verified chunk boundary when re-commanded. | UT `AbortAndResume`, `ChunkFailed` |
 | DP-007 | The decompression coder shall be replaceable by the project (`setCoder`). | Inspection, UT |
 | DP-008 | `APPLY_PATCH` shall complete `OK` only after the new image is fully written and verified. | UT |
@@ -35,8 +35,11 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   patching, performs exactly one `DeltaCodec::step()`. A step verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes
   or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
-  with `BAD_HEADER`/`BAD_OPCODE`, so per-tick work is bounded by flight configuration rather than by the patch. The
-  step performs blocking `Os::File` I/O on the rate-group thread; drive `run` from a slow, non-critical rate group.
+  with `BAD_HEADER`/`BAD_OPCODE`. Because a coder may expand its input (LZSS up to 129:1), the decoded operation
+  stream is additionally bounded by construction: a `SEEK` must be followed by a producing op, so a chunk never
+  parses more than `2 * chunk_bytes` operations before it is rejected with `BAD_OPCODE`. Per-tick work is thus
+  bounded by flight configuration rather than by the patch. The step performs blocking `Os::File` I/O on the
+  rate-group thread; drive `run` from a slow, non-critical rate group.
 * **Media.** `old_file`, `patch_file` and `new_file` must be distinct strings (`SAME_FILE` otherwise; path aliases
   such as symlinks are not detected). `old_file` and `patch_file` are opened `READ_ONLY`; `new_file` is opened
   `READ_WRITE` (created if absent, preserved otherwise so a partial output can be resumed). If an existing
@@ -45,6 +48,10 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 * **Resume.** On `begin()`, the codec walks the existing `new_file` chunk-by-chunk, comparing the CRC of each
   prefix chunk to the CRC stored in the patch. Patching restarts at the first chunk that does not verify. No coder
   state is persisted because each chunk is coded independently. `PatchResumed(chunk)` reports the restart point.
+* **Read-back.** After the last chunk the codec calls `DeltaMedia::flush()` on the new image (`WRITE_ERROR` on
+  failure) and enters `VERIFY_FINAL`, re-reading the stored image in `DELTA_VERIFY_BYTES_PER_STEP` slices and
+  comparing size and CRC to the header (`NEW_IMAGE_MISMATCH` otherwise). `COMPLETE` therefore attests to the bytes
+  on the media, not to the bytes handed to it; a project flash-region `DeltaMedia` gets write-then-verify for free.
 * **Command completion.** `APPLY_PATCH` responds when the codec reaches `COMPLETE` (OK) or `FAILED`
   (EXECUTION_ERROR). Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
   failures, old-image *size* mismatch, `OUTPUT_STALE`) respond at once with `PatchRejected`. Failures detected while
@@ -79,7 +86,8 @@ LIT   0x02  uvar n, n bytes   new[o:o+n] = bytes
 SEEK  0x03  svar d            old cursor += d              (zigzag)
 ```
 
-`uvar` is LEB128 (at most 5 bytes). Operations may not cross a chunk boundary. The old cursor resets to
+`uvar` is LEB128 (at most 5 bytes). Operations may not cross a chunk boundary; `n > 0`; a `SEEK` must be directly
+followed by `COPY`/`ADD`/`LIT` (two consecutive `SEEK`s are `BAD_OPCODE`). The old cursor resets to
 `chunk_index * chunk_bytes` at each chunk start so chunks are independent.
 
 Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `Delta/DeltaCoder.hpp`).

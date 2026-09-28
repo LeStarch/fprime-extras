@@ -15,7 +15,8 @@ equals the chunk's new-image offset and coder history is empty, so chunks decode
     COPY 0x00 uvar n           new[o:o+n] = old[c:c+n]; c += n
     ADD  0x01 uvar n, n bytes  new[o:o+n] = (old[c:c+n] + bytes) mod 256; c += n
     LIT  0x02 uvar n, n bytes  new[o:o+n] = bytes
-    SEEK 0x03 svar d           c += d   (zigzag-encoded, 0 <= c <= old_size afterwards)
+    SEEK 0x03 svar d           c += d   (zigzag-encoded, 0 <= c <= old_size afterwards;
+                                        must be followed by COPY/ADD/LIT, never another SEEK)
 
 uvar is unsigned LEB128, at most 5 bytes. Operations never span a chunk boundary and n > 0.
 """
@@ -292,12 +293,16 @@ def apply_chunk(old: bytes, raw: bytes, new_offset: int, expected: int, old_size
     out = bytearray()
     cursor = new_offset
     pos = 0
+    seek_pending = False
     while len(out) < expected:
         if pos >= len(raw):
             raise SPatchError("chunk op stream truncated")
         kind = raw[pos]
         operand, pos = read_uvar(raw, pos + 1)
         if kind == OP_SEEK:
+            if seek_pending:
+                raise SPatchError("consecutive SEEK ops")
+            seek_pending = True
             cursor += unzigzag(operand)
             if not 0 <= cursor <= old_size:
                 raise SPatchError("seek out of old image")
@@ -306,6 +311,7 @@ def apply_chunk(old: bytes, raw: bytes, new_offset: int, expected: int, old_size
             raise SPatchError(f"bad opcode {kind}")
         if operand == 0 or len(out) + operand > expected:
             raise SPatchError("op length invalid or crosses chunk boundary")
+        seek_pending = False
         if kind in (OP_COPY, OP_ADD):
             if cursor + operand > old_size:
                 raise SPatchError("copy beyond old image")

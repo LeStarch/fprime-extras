@@ -11,7 +11,8 @@
 
 namespace Update {
 
-static const U8 SPATCH_MAGIC[4] = {'S', 'P', 'A', 'T'};
+static constexpr U8 SPATCH_MAGIC[4] = {'S', 'P', 'A', 'T'};
+static_assert(sizeof(SPATCH_MAGIC) == DeltaCodec::HDR_VERSION, "Magic precedes the version byte");
 static constexpr FwSizeType VARINT_MAX_BYTES = 5;  // 35 bits: covers U32 lengths and zigzag 33-bit seeks
 
 DeltaCodec::DeltaCodec(DeltaCoder& coder)
@@ -150,6 +151,8 @@ DeltaCodec::Status DeltaCodec::step() {
                 return this->finish();
             }
             return this->patchChunk();
+        case VERIFY_FINAL:
+            return this->verifyFinalStep();
         case IDLE:
         case COMPLETE:
         case FAILED:
@@ -183,8 +186,8 @@ DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc
     if (this->m_patch->read(this->m_patchPos, this->m_patchBuffer, CHUNK_HEADER_SIZE) != DeltaMedia::OP_OK) {
         return READ_ERROR;
     }
-    codedLength = readU32(this->m_patchBuffer);
-    crc = readU32(this->m_patchBuffer + 4);
+    codedLength = readU32(this->m_patchBuffer + CHUNK_HDR_CODED_LENGTH);
+    crc = readU32(this->m_patchBuffer + CHUNK_HDR_CRC);
     if (codedLength > DELTA_MAX_CODED_CHUNK_BYTES) {
         return BAD_OPCODE;
     }
@@ -273,7 +276,39 @@ DeltaCodec::Status DeltaCodec::finish() {
     if (crcFinal(this->m_committedCrc) != this->m_newCrc) {
         return this->fail(NEW_IMAGE_MISMATCH);
     }
-    this->m_state = COMPLETE;
+    // The CRC above covers what was handed to the media; COMPLETE requires the stored bytes to agree
+    if (this->m_new->flush() != DeltaMedia::OP_OK) {
+        return this->fail(WRITE_ERROR);
+    }
+    this->m_verifyOffset = 0;
+    this->m_verifyCrc = crcInit();
+    this->m_state = VERIFY_FINAL;
+    return OP_OK;
+}
+
+DeltaCodec::Status DeltaCodec::verifyFinalStep() {
+    FwSizeType budget = DELTA_VERIFY_BYTES_PER_STEP;
+    while (budget > 0 && this->m_verifyOffset < this->m_newSize) {
+        const FwSizeType remaining = static_cast<FwSizeType>(this->m_newSize) - this->m_verifyOffset;
+        FwSizeType length = (remaining < DELTA_OUTPUT_BUFFER_SIZE) ? remaining : DELTA_OUTPUT_BUFFER_SIZE;
+        length = (length < budget) ? length : budget;
+        if (this->m_new->read(this->m_verifyOffset, this->m_outBuffer, length) != DeltaMedia::OP_OK) {
+            return this->fail(READ_ERROR);
+        }
+        this->m_verifyCrc = crcUpdate(this->m_verifyCrc, this->m_outBuffer, length);
+        this->m_verifyOffset += length;
+        budget -= length;
+    }
+    if (this->m_verifyOffset >= this->m_newSize) {
+        FwSizeType storedSize = 0;
+        if (this->m_new->size(storedSize) != DeltaMedia::OP_OK) {
+            return this->fail(READ_ERROR);
+        }
+        if (storedSize != this->m_newSize || crcFinal(this->m_verifyCrc) != this->m_newCrc) {
+            return this->fail(NEW_IMAGE_MISMATCH);
+        }
+        this->m_state = COMPLETE;
+    }
     return OP_OK;
 }
 
@@ -302,6 +337,7 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
     chunk.op = OP_COPY;
     chunk.opActive = false;
     chunk.opRemaining = 0;
+    chunk.seekPending = false;
 
     this->m_coder->reset();
     this->m_ring.reset();
@@ -411,6 +447,12 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
 
     switch (opByte) {
         case OP_SEEK: {
+            // A SEEK is only meaningful before a producing op; consecutive SEEKs let a patch burn a whole coded
+            // chunk (expanded by the coder) without producing output, defeating the per-step work bound
+            if (chunk.seekPending) {
+                return BAD_OPCODE;
+            }
+            chunk.seekPending = true;
             // Zigzag-decoded signed delta applied to the old cursor
             const I64 delta = static_cast<I64>(operand >> 1) ^ -static_cast<I64>(operand & 1);
             const I64 cursor = static_cast<I64>(chunk.oldCursor) + delta;
@@ -426,6 +468,7 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
             if (operand == 0 || operand > static_cast<U64>(chunk.expected - chunk.produced)) {
                 return BAD_OPCODE;
             }
+            chunk.seekPending = false;
             chunk.op = static_cast<Op>(opByte);
             chunk.opRemaining = static_cast<FwSizeType>(operand);
             chunk.opActive = true;
