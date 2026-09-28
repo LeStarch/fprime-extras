@@ -31,10 +31,10 @@ module Update {
             old_file: string size FileNameStringSize @< Existing image (never modified)
             patch_file: string size FileNameStringSize @< Uplinked .spatch file
             new_file: string size FileNameStringSize @< Output image (created or extended)
-        ) drop
+        ) hook
 
         @ Abort an in-progress patch; the partial new_file is retained for later resume
-        async command ABORT_PATCH() drop
+        async command ABORT_PATCH() hook
 
         @ A patch has been accepted and started
         event PatchStarted(

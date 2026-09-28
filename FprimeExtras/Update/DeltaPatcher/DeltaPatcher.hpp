@@ -17,7 +17,7 @@ namespace Update {
 //!
 //! All handlers execute on the caller of `run` (commands are dispatched from the queue there), so no locking is needed
 //! and the engine's fixed buffers are the only patch-time storage. The shipped LZSS coder is used unless a project
-//! supplies its own via `setCoder()` before the first APPLY_PATCH.
+//! supplies its own via `setCoder()` during topology setup, before rate groups start.
 class DeltaPatcher final : public DeltaPatcherComponentBase {
     friend class DeltaPatcherTester;
 
@@ -34,7 +34,8 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
 
     //! \brief Substitute the decompression coder used to decode SPatch payloads (project plugin seam)
     //!
-    //! Must be called before any patch is applied; the coder must outlive this component.
+    //! Call during topology setup, before rate groups start (FW_ASSERTs if a patch is in progress); the coder must
+    //! outlive this component.
     void setCoder(DeltaCoder& coder);
 
   private:
@@ -71,6 +72,12 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     void ABORT_PATCH_cmdHandler(FwOpcodeType opCode,  //!< The opcode
                                 U32 cmdSeq            //!< The command sequence number
                                 ) override;
+
+    //! Queue-full hook for APPLY_PATCH: respond BUSY on the caller's thread so the dispatcher never waits
+    void APPLY_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) override;
+
+    //! Queue-full hook for ABORT_PATCH: respond BUSY on the caller's thread so the dispatcher never waits
+    void ABORT_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) override;
 
   private:
     // ----------------------------------------------------------------------

@@ -124,6 +124,15 @@ void DeltaPatcher ::ABORT_PATCH_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
     this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
 }
 
+void DeltaPatcher ::APPLY_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) {
+    this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::BUSY);
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
+}
+
+void DeltaPatcher ::ABORT_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) {
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
+}
+
 // ----------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------

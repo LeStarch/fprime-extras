@@ -32,7 +32,7 @@ class DeltaCoder {
     enum Id : U8 {
         ID_NONE = 0,  //!< Pass-through
         ID_RLE = 1,   //!< Byte run-length encoding
-        ID_LZSS = 2   //!< LZSS with a window equal to the ring capacity
+        ID_LZSS = 2   //!< LZSS, fixed 256-byte window held in the ring history
     };
 
     virtual ~DeltaCoder() = default;
@@ -76,7 +76,7 @@ class DeltaCoderRle final : public DeltaCoder {
     FwSizeType m_remaining;
 };
 
-//! \brief LZSS coder (id 2) whose window is the ring itself
+//! \brief LZSS coder (id 2); its 256-byte window lives in the ring history (ring capacity must be >= WINDOW)
 //!
 //! Stream: flag byte, then 8 items MSB first. Flag bit 0 => one literal byte. Flag bit 1 => two bytes:
 //! distance-1 (distance 1..256) and length-3 (length 3..258); bytes are copied from `distance` back in history,

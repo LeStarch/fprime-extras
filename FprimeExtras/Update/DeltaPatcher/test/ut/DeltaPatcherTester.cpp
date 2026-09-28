@@ -308,6 +308,31 @@ void DeltaPatcherTester ::abortIdle() {
   ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::IDLE);
 }
 
+void DeltaPatcherTester ::queueOverflow() {
+  // Fill the queue, then one more: the overflow hook must answer BUSY on the
+  // caller's thread so the dispatcher never waits on a dropped command
+  for (U32 seq = 1; seq <= TEST_INSTANCE_QUEUE_DEPTH; seq++) {
+    this->sendCmd_ABORT_PATCH(0, seq);
+  }
+  ASSERT_CMD_RESPONSE_SIZE(0);
+  this->sendCmd_ABORT_PATCH(0, TEST_INSTANCE_QUEUE_DEPTH + 1);
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_ABORT_PATCH,
+                      TEST_INSTANCE_QUEUE_DEPTH + 1, Fw::CmdResponse::BUSY);
+  this->sendCmd_APPLY_PATCH(0, TEST_INSTANCE_QUEUE_DEPTH + 2,
+                            Fw::CmdStringArg(this->m_old.c_str()),
+                            Fw::CmdStringArg(this->m_patch.c_str()),
+                            Fw::CmdStringArg(this->m_new.c_str()));
+  ASSERT_CMD_RESPONSE_SIZE(2);
+  ASSERT_CMD_RESPONSE(1, DeltaPatcher::OPCODE_APPLY_PATCH,
+                      TEST_INSTANCE_QUEUE_DEPTH + 2, Fw::CmdResponse::BUSY);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BUSY);
+  // Queued commands are still dispatched, MAX_DISPATCH_PER_TICK per tick
+  this->invoke_to_run(0, 0);
+  ASSERT_CMD_RESPONSE_SIZE(2 + DeltaPatcher::MAX_DISPATCH_PER_TICK);
+}
+
 void DeltaPatcherTester ::sameFile() {
   // new_file aliasing old_file would destroy the only copy of the old image:
   // rejected before any open

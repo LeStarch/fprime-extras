@@ -76,6 +76,9 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! ABORT_PATCH when idle is a validation error
     void abortIdle();
 
+    //! Queue-full commands are answered BUSY immediately via the overflow hook
+    void queueOverflow();
+
     //! APPLY_PATCH with new_file == old_file is rejected with SAME_FILE before any file is opened
     void sameFile();
 

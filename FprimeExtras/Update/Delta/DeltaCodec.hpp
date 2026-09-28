@@ -32,14 +32,14 @@ class DeltaCodec final {
     //! Outcome of begin()/step(); mirrors Update.DeltaPatchStatus
     enum Status {
         OP_OK,
-        BAD_HEADER,           //!< Magic, version, coder id, CRC, or geometry of the SPatch header is invalid
-        OLD_IMAGE_MISMATCH,   //!< Old image size or CRC differs from the header
-        TRUNCATED,            //!< Patch ended before the declared content
-        CHUNK_CRC,            //!< Chunk output CRC failed
-        BAD_OPCODE,           //!< Unknown op, operand out of bounds, or coder reported malformed payload
-        READ_ERROR,           //!< Media read failed
-        WRITE_ERROR,          //!< Media write failed
-        NEW_IMAGE_MISMATCH,   //!< Final new image CRC differs from the header
+        BAD_HEADER,          //!< Magic, version, flags, reserved byte, CRC, or geometry of the SPatch header is invalid
+        OLD_IMAGE_MISMATCH,  //!< Old image size or CRC differs from the header
+        TRUNCATED,           //!< Patch ended before the declared content
+        CHUNK_CRC,           //!< Chunk output CRC failed
+        BAD_OPCODE,          //!< Unknown op, operand out of bounds, or coder reported malformed payload
+        READ_ERROR,          //!< Media read failed
+        WRITE_ERROR,         //!< Media write failed
+        NEW_IMAGE_MISMATCH,  //!< Final new image CRC, or stored size/CRC on read-back, differs from the header
         PATCH_SIZE_MISMATCH,  //!< Patch has bytes beyond the last chunk
         OUTPUT_STALE,         //!< Existing new image is larger than the target; caller must recreate it
         CODER_MISMATCH        //!< Header is valid but names a coder other than the installed one

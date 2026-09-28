@@ -52,6 +52,11 @@ TEST(OffNominal, AbortIdle) {
     tester.abortIdle();
 }
 
+TEST(OffNominal, QueueOverflow) {
+    Update::DeltaPatcherTester tester;
+    tester.queueOverflow();
+}
+
 TEST(OffNominal, SameFile) {
     Update::DeltaPatcherTester tester;
     tester.sameFile();

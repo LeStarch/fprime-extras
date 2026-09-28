@@ -11,7 +11,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 | --- | --- | --- |
 | DP-001 | The component shall reconstruct `new_file` from `old_file` and an SPatch `patch_file`. | UT Nominal |
 | DP-002 | The component shall never write to `old_file`. | Inspection (`READ_ONLY` media) |
-| DP-003 | Fixed codec state shall not exceed 1 KB with default configuration. | UT `RamBudget` |
+| DP-003 | Fixed codec state shall not exceed 1 KB with default configuration. | UT `DeltaCodec.MemoryFootprint` (Delta library) |
 | DP-004 | All work shall occur in bounded steps driven by `run` (a rate group); no thread is created. | Inspection, UT |
 | DP-005 | The old image, each chunk's output, and the completed new image (flushed and read back from the media) shall be CRC32-verified. | UT |
 | DP-006 | An interrupted or failed patch shall resume at the last verified chunk boundary when re-commanded. | UT `AbortAndResume`, `ChunkFailed` |
@@ -39,7 +39,9 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   stream is additionally bounded by construction: a `SEEK` must be followed by a producing op, so a chunk never
   parses more than `2 * chunk_bytes` operations before it is rejected with `BAD_OPCODE`. Per-tick work is thus
   bounded by flight configuration rather than by the patch. The step performs blocking `Os::File` I/O on the
-  rate-group thread; drive `run` from a slow, non-critical rate group.
+  rate-group thread; drive `run` from a slow, non-critical rate group. Both commands use the FPP `hook` overflow
+  policy: a command arriving on a full queue is answered `BUSY` immediately on the caller's thread (`APPLY_PATCH`
+  also emits `PatchRejected(BUSY)`), so `Svc::CmdDispatcher` never waits on a lost response.
 * **Media.** `old_file`, `patch_file` and `new_file` must be distinct strings (`SAME_FILE` otherwise; path aliases
   such as symlinks are not detected). `old_file` and `patch_file` are opened `READ_ONLY`; `new_file` is opened
   `READ_WRITE` (created if absent, preserved otherwise so a partial output can be resumed). If an existing
@@ -59,7 +61,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   complete the deferred command with EXECUTION_ERROR.
 * **Abort.** `ABORT_PATCH` closes the media, responds `EXECUTION_ERROR` to the pending `APPLY_PATCH`, emits
   `PatchAborted` and leaves `new_file` in place. When idle it emits `AbortIgnored` and responds `VALIDATION_ERROR`.
-* **Coder seam.** `DeltaPatcher::setCoder(DeltaCoder&)` (call before the topology starts) substitutes a
+* **Coder seam.** `DeltaPatcher::setCoder(DeltaCoder&)` (call during topology setup, before rate groups start; `FW_ASSERT`s if a patch is in progress; the coder must outlive the component) substitutes a
   project-supplied decompressor. The coder id in the SPatch header must match the installed coder; an otherwise
   valid header naming a different coder is rejected with `CODER_MISMATCH` (distinct from `BAD_HEADER`, which
   indicates corruption or an out-of-range geometry).
@@ -94,7 +96,7 @@ Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `D
 
 The chunk count and each chunk's raw length are derived from `new_size` and `chunk_bytes` rather than carried in
 the file, and the per-chunk CRC covers the *decoded output* rather than the coded payload: a corrupted payload
-either fails to decode (`MALFORMED`/`TRUNCATED`) or produces output whose CRC does not match, while the output
+either fails to decode (reported as `BAD_OPCODE` or `TRUNCATED`) or produces output whose CRC does not match, while the output
 CRC additionally guards against decoder faults and is what makes the resume scan (re-reading the new image only)
 possible without touching the patch payload.
 
@@ -132,7 +134,7 @@ possible without touching the patch payload.
 | `State` | `DeltaPatchState` | IDLE / PATCHING / FAILED / COMPLETE |
 | `ChunksDone` | U32 | Chunks verified or written |
 | `ChunksTotal` | U32 | Chunk count from header |
-| `BytesWritten` | U64 | Output bytes produced |
+| `BytesWritten` | U64 | New-image bytes written or verified so far (chunk granularity) |
 | `LastStatus` | `DeltaPatchStatus` | Last terminal status |
 
 ## Configuration
