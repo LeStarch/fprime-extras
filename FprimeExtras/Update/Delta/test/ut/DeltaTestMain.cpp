@@ -96,7 +96,7 @@ static DeltaCodec::Status run(DeltaCodec &codec, U32 &steps) {
 }
 
 //! Feed coded data through a coder in `pieceSize` slices, draining the ring
-//! into `out`; mimics DeltaCodec::fillRing
+//! into `out`; mimics DeltaCodec::fillWindow
 static DeltaCoder::Status decodeAll(DeltaCoder &coder, const U8 *coded,
                                     FwSizeType codedSize, FwSizeType pieceSize,
                                     FwSizeType drainSize,
@@ -447,6 +447,18 @@ TEST(DeltaCodec, RejectsSizeWidthMismatch) {
   EXPECT_EQ(applyPatch(coder, other, oldImage, state),
             DeltaCodec::SIZE_WIDTH_MISMATCH);
   EXPECT_EQ(state, DeltaCodec::FAILED);
+
+  // A short patch from the other width is still reported as a width mismatch,
+  // since the fixed prefix is checked before the width-dependent header length
+  std::vector<U8> shortPatch = other;
+  shortPatch.resize(DeltaCodec::HDR_OLD_SIZE);
+  EXPECT_EQ(applyPatch(coder, shortPatch, oldImage, state),
+            DeltaCodec::SIZE_WIDTH_MISMATCH);
+
+  // Shorter than the fixed prefix: nothing to classify, so truncated
+  shortPatch.resize(DeltaCodec::HDR_OLD_SIZE - 1);
+  EXPECT_EQ(applyPatch(coder, shortPatch, oldImage, state),
+            DeltaCodec::TRUNCATED);
 }
 
 TEST(DeltaCodec, RejectsOversizedGeometry) {

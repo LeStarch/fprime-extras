@@ -64,6 +64,9 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Valid patch for a different coder is rejected CODER_MISMATCH at command time
     void coderMismatch();
 
+    //! Patch serialized with the other FwSizeType width is rejected SIZE_WIDTH_MISMATCH at command time
+    void sizeWidthMismatch();
+
     //! Wrong old image reports OldImageMismatch
     void oldImageMismatch();
 

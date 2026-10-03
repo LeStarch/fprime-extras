@@ -40,7 +40,7 @@ _SIZE_FORMATS = {4: "I", 8: "Q"}
 
 
 def header_size(size_width: int) -> int:
-    """Header bytes for a given FwSizeType width: 36 (32-bit) or 48 (64-bit)"""
+    """Header bytes for a given FwSizeType width: 32 (32-bit) or 44 (64-bit)"""
     return 20 + 3 * size_width
 
 

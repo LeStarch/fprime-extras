@@ -37,6 +37,11 @@ TEST(OffNominal, CoderMismatch) {
     tester.coderMismatch();
 }
 
+TEST(OffNominal, SizeWidthMismatch) {
+    Update::DeltaPatcherTester tester;
+    tester.sizeWidthMismatch();
+}
+
 TEST(OffNominal, OldImageMismatch) {
     Update::DeltaPatcherTester tester;
     tester.oldImageMismatch();

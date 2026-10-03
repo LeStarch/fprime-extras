@@ -187,6 +187,21 @@ void DeltaPatcherTester ::coderMismatch() {
   ASSERT_EVENTS_PatchStarted_SIZE(0);
 }
 
+void DeltaPatcherTester ::sizeWidthMismatch() {
+  // Valid LZSS patch serialized with the other FwSizeType width
+  const U8* patch = (sizeof(FwSizeType) == 8) ? PATCH_LZSS_W4 : PATCH_LZSS_W8;
+  const FwSizeType size = (sizeof(FwSizeType) == 8) ? PATCH_LZSS_W4_SIZE : PATCH_LZSS_W8_SIZE;
+  writeFile(this->m_patch, patch, size);
+  this->apply(1);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::SIZE_WIDTH_MISMATCH);
+  ASSERT_TLM_LastStatus(this->tlmHistory_LastStatus->size() - 1,
+                        DeltaPatchStatus::SIZE_WIDTH_MISMATCH);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::EXECUTION_ERROR);
+  ASSERT_EVENTS_PatchStarted_SIZE(0);
+}
+
 void DeltaPatcherTester ::oldImageMismatch() {
   std::vector<U8> old(OLD_IMAGE, OLD_IMAGE + OLD_IMAGE_SIZE);
   old[OLD_IMAGE_SIZE / 2] ^= 0x01;

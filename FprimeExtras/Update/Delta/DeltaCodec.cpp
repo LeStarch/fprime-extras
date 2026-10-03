@@ -81,10 +81,13 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
     if (patch.size(this->m_patchSize) != DeltaMedia::OP_OK) {
         return this->fail(READ_ERROR);
     }
-    if (this->m_patchSize < HEADER_SIZE) {
+    // The fixed prefix (magic, version, coder, flags, size width) is validated before the width-dependent remainder
+    // so that a short patch from the other width is still reported as SIZE_WIDTH_MISMATCH
+    const FwSizeType prefixLength = (this->m_patchSize < HEADER_SIZE) ? this->m_patchSize : HEADER_SIZE;
+    if (prefixLength < HDR_OLD_SIZE) {
         return this->fail(TRUNCATED);
     }
-    if (patch.read(0, this->m_patchBuffer, HEADER_SIZE) != DeltaMedia::OP_OK) {
+    if (patch.read(0, this->m_patchBuffer, prefixLength) != DeltaMedia::OP_OK) {
         return this->fail(READ_ERROR);
     }
     const U8* header = this->m_patchBuffer;
@@ -99,6 +102,9 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
     // The header layout depends on the size width, so this must be checked before the CRC can be located
     if (header[HDR_SIZE_WIDTH] != SIZE_FIELD_WIDTH) {
         return this->fail(SIZE_WIDTH_MISMATCH);
+    }
+    if (this->m_patchSize < HEADER_SIZE) {
+        return this->fail(TRUNCATED);
     }
     Fw::ExternalSerializeBuffer fields(this->m_patchBuffer, HEADER_SIZE);
     U32 headerCrc = 0;
@@ -192,7 +198,8 @@ DeltaCodec::Status DeltaCodec::fail(Status status) {
 }
 
 DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc) {
-    if (this->m_patchPos + CHUNK_HEADER_SIZE > this->m_patchSize) {
+    FW_ASSERT(this->m_patchPos <= this->m_patchSize, static_cast<FwAssertArgType>(this->m_patchPos));
+    if (CHUNK_HEADER_SIZE > this->m_patchSize - this->m_patchPos) {
         return TRUNCATED;
     }
     if (this->m_patch->read(this->m_patchPos, this->m_patchBuffer, CHUNK_HEADER_SIZE) != DeltaMedia::OP_OK) {
@@ -385,7 +392,9 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
 }
 
 DeltaCodec::Status DeltaCodec::fillWindow(Chunk& chunk) {
-    while (this->m_window.space() > 0) {
+    // Each pass pushes at least one byte or returns, so the free window space bounds the passes
+    const FwSizeType maxPasses = this->m_window.space();
+    for (FwSizeType pass = 0; pass < maxPasses && this->m_window.space() > 0; pass++) {
         if (chunk.patchPos >= chunk.patchFill && chunk.codedRemaining > 0) {
             const FwSizeType length =
                 (chunk.codedRemaining < DELTA_PATCH_BUFFER_SIZE) ? chunk.codedRemaining : DELTA_PATCH_BUFFER_SIZE;
@@ -438,24 +447,27 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
     static_assert(DELTA_WINDOW_SIZE > VARINT_MAX_BYTES, "Window must hold an op byte and its operand");
     U64 operand = 0;
     FwSizeType operandLength = 0;
-    while (true) {
-        VarintResult result = VARINT_NEED_MORE;
+    // Each pass adds at least one window byte or returns; an op byte plus operand needs at most 1 + VARINT_MAX_BYTES
+    VarintResult result = VARINT_NEED_MORE;
+    for (FwSizeType pass = 0; pass <= 1 + VARINT_MAX_BYTES && result == VARINT_NEED_MORE; pass++) {
         if (this->m_window.count() >= 1) {
             result = this->readVarint(1, operand, operandLength);
         }
         if (result == VARINT_INVALID) {
             return BAD_OPCODE;
-        } else if (result == VARINT_OK) {
-            break;
+        } else if (result == VARINT_NEED_MORE) {
+            const FwSizeType before = this->m_window.count();
+            const Status status = this->fillWindow(chunk);
+            if (status != OP_OK) {
+                return status;
+            }
+            if (this->m_window.count() == before) {
+                return TRUNCATED;
+            }
         }
-        const FwSizeType before = this->m_window.count();
-        const Status status = this->fillWindow(chunk);
-        if (status != OP_OK) {
-            return status;
-        }
-        if (this->m_window.count() == before) {
-            return TRUNCATED;
-        }
+    }
+    if (result != VARINT_OK) {
+        return BAD_OPCODE;
     }
     const U8 opByte = this->m_window.peek(0);
     this->m_window.pop(1 + operandLength);

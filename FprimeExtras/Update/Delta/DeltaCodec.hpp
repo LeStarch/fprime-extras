@@ -32,7 +32,7 @@ class DeltaCodec final {
     //! Outcome of begin()/step(); mirrors Update.DeltaPatchStatus
     enum Status {
         OP_OK,
-        BAD_HEADER,          //!< Magic, version, flags, reserved byte, CRC, or geometry of the SPatch header is invalid
+        BAD_HEADER,          //!< Magic, version, flags, CRC, or geometry of the SPatch header is invalid
         OLD_IMAGE_MISMATCH,  //!< Old image size or CRC differs from the header
         TRUNCATED,           //!< Patch ended before the declared content
         CHUNK_CRC,           //!< Chunk output CRC failed
