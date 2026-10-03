@@ -33,3 +33,15 @@ flowchart TD
 This component is designed to work with an implementation of the `UpdateWorker` component. The `UpdateWorker` is provided by the project in order to work with the specific underlying media. This is done via the `UpdateWorkerClient` interface.
 
 ![Updater Diagram](./diagram.svg)
+
+## Command Handling
+
+Only one command runs at a time. A command received while another is in progress is rejected with `BUSY` and emits the
+command's failure event with status `BUSY`.
+
+`CONFIGURE_NEXT_BOOT` and `CONFIRM_UPDATE` call the worker synchronously and respond immediately. `PREPARE_UPDATE` and
+`UPDATE_IMAGE_FROM` start the worker and respond when the worker calls `prepareImageDone` or `updateImageDone`. The
+component is released before the response is sent, so a command issued on receipt of the response is accepted.
+
+A done call that does not match the outstanding operation (no operation outstanding, the other operation outstanding,
+or a duplicate) is ignored and reported with `UnexpectedPrepareDone` or `UnexpectedUpdateDone`.

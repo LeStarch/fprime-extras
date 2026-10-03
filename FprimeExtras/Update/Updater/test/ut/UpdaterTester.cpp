@@ -6,6 +6,7 @@
 // ======================================================================
 
 #include "FprimeExtras/Update/Updater/test/ut/UpdaterTester.hpp"
+#include "STest/Pick/Pick.hpp"
 
 namespace Update {
 
@@ -35,6 +36,44 @@ Update::UpdateStatus UpdaterTester ::from_nextBoot_handler(FwIndexType portNum, 
 Update::UpdateStatus UpdaterTester ::from_confirmImage_handler(FwIndexType portNum) {
     this->pushFromPortEntry_confirmImage();
     return this->shadow.shadow_workerReturn;
+}
+
+void UpdaterTester ::cmdResponseIn(FwOpcodeType opCode, U32 cmdSeq, Fw::CmdResponse response) {
+    UpdaterGTestBase::cmdResponseIn(opCode, cmdSeq, response);
+    if (this->probeOnResponse) {
+        this->probeOnResponse = false;
+        this->sendCmd_CONFIRM_UPDATE(TEST_INSTANCE_ID, 0);
+        this->dispatch();
+    }
+}
+
+// ----------------------------------------------------------------------
+// Directed tests
+// ----------------------------------------------------------------------
+
+void UpdaterTester ::testBusyReleasedBeforeResponse(bool update) {
+    const U32 cmdSeq = STest::Pick::any();
+    FwOpcodeType opCode = UpdaterComponentBase::OPCODE_PREPARE_UPDATE;
+    if (update) {
+        opCode = UpdaterComponentBase::OPCODE_UPDATE_IMAGE_FROM;
+        this->sendCmd_UPDATE_IMAGE_FROM(TEST_INSTANCE_ID, cmdSeq, Fw::String("image.bin"), 0);
+    } else {
+        this->sendCmd_PREPARE_UPDATE(TEST_INSTANCE_ID, cmdSeq);
+    }
+    this->dispatch();
+    this->clearHistory();
+
+    this->probeOnResponse = true;
+    if (update) {
+        this->invoke_to_updateImageDone(0, Update::UpdateStatus::OP_OK);
+    } else {
+        this->invoke_to_prepareImageDone(0, Update::UpdateStatus::OP_OK);
+    }
+
+    ASSERT_CMD_RESPONSE_SIZE(2);
+    ASSERT_CMD_RESPONSE(0, opCode, cmdSeq, Fw::CmdResponse::OK);
+    ASSERT_CMD_RESPONSE(1, UpdaterComponentBase::OPCODE_CONFIRM_UPDATE, 0, Fw::CmdResponse::OK);
+    ASSERT_from_confirmImage_SIZE(1);
 }
 
 // ----------------------------------------------------------------------
