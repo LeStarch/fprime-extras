@@ -117,7 +117,7 @@ void Updater ::CONFIRM_UPDATE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
         }
         this->m_busy = false;
     } else {
-        this->log_WARNING_HI_SetNextBootFailed(Update::UpdateStatus::BUSY);
+        this->log_WARNING_HI_ConfirmBootFailed(Update::UpdateStatus::BUSY);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
     }
 }
