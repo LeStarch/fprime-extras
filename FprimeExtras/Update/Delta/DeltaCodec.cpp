@@ -1,12 +1,13 @@
 // ======================================================================
 // \title  DeltaCodec.cpp
 // \author starchmd
-// \brief  cpp file for the SPatch v1 streaming patch engine
+// \brief  cpp file for the SPatch v2 streaming patch engine
 // \copyright Copyright (c) 2026 Michael Starch
 // ======================================================================
 #include "FprimeExtras/Update/Delta/DeltaCodec.hpp"
 
 #include "Fw/Types/Assert.hpp"
+#include "Fw/Types/Serializable.hpp"
 #include "Utils/Hash/Crc32/Crc32.hpp"
 
 namespace Update {
@@ -21,9 +22,9 @@ DeltaCodec::DeltaCodec(DeltaCoder& coder)
       m_patch(nullptr),
       m_new(nullptr),
       m_patchBuffer(),
-      m_ringBuffer(),
+      m_windowBuffer(),
       m_outBuffer(),
-      m_ring(m_ringBuffer, DELTA_RING_SIZE),
+      m_window(m_windowBuffer, DELTA_WINDOW_SIZE),
       m_state(IDLE),
       m_lastStatus(OP_OK),
       m_oldSize(0),
@@ -73,10 +74,10 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
     this->m_patch = &patch;
     this->m_new = &newImage;
 
-    // Header (little-endian): magic[4] version u8 coder u8 flags u8 reserved u8 | old_size u32 old_crc u32
-    //                         new_size u32 new_crc u32 chunk_bytes u32 header_crc u32
+    // Header (F Prime big-endian): magic[4] version u8 coder u8 flags u8 size_width u8 | old_size FwSizeType
+    //                               old_crc u32 new_size FwSizeType new_crc u32 chunk_bytes FwSizeType header_crc u32
     static_assert(DELTA_PATCH_BUFFER_SIZE >= HEADER_SIZE, "Patch buffer must hold the SPatch header");
-    static_assert(DELTA_RING_SIZE >= DeltaCoderLzss::WINDOW, "DELTA_RING_SIZE must cover the default LZSS window");
+    static_assert(DELTA_WINDOW_SIZE >= DeltaCoderLzss::WINDOW, "DELTA_WINDOW_SIZE must cover the default LZSS window");
     if (patch.size(this->m_patchSize) != DeltaMedia::OP_OK) {
         return this->fail(READ_ERROR);
     }
@@ -92,27 +93,38 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
             return this->fail(BAD_HEADER);
         }
     }
-    if (header[HDR_VERSION] != VERSION || header[HDR_FLAGS] != 0 || header[HDR_RESERVED] != 0) {
+    if (header[HDR_VERSION] != VERSION || header[HDR_FLAGS] != 0) {
         return this->fail(BAD_HEADER);
     }
-    if (crcFinal(crcUpdate(crcInit(), header, HDR_CRC)) != readU32(header + HDR_CRC)) {
+    // The header layout depends on the size width, so this must be checked before the CRC can be located
+    if (header[HDR_SIZE_WIDTH] != SIZE_FIELD_WIDTH) {
+        return this->fail(SIZE_WIDTH_MISMATCH);
+    }
+    Fw::ExternalSerializeBuffer fields(this->m_patchBuffer, HEADER_SIZE);
+    U32 headerCrc = 0;
+    if (fields.setBuffLen(HEADER_SIZE) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeSkip(HDR_OLD_SIZE) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(this->m_oldSize) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(this->m_oldCrc) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(this->m_newSize) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(this->m_newCrc) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(this->m_chunkBytes) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(headerCrc) != Fw::FW_SERIALIZE_OK) {
+        return this->fail(BAD_HEADER);
+    }
+    if (crcFinal(crcUpdate(crcInit(), header, HDR_CRC)) != headerCrc) {
         return this->fail(BAD_HEADER);
     }
     // Header is intact: a coder id mismatch is a ground/flight configuration disagreement, not corruption
     if (header[HDR_CODER] != this->m_coder->id()) {
         return this->fail(CODER_MISMATCH);
     }
-    this->m_oldSize = readU32(header + HDR_OLD_SIZE);
-    this->m_oldCrc = readU32(header + HDR_OLD_CRC);
-    this->m_newSize = readU32(header + HDR_NEW_SIZE);
-    this->m_newCrc = readU32(header + HDR_NEW_CRC);
-    this->m_chunkBytes = readU32(header + HDR_CHUNK_BYTES);
     if (this->m_chunkBytes == 0 || this->m_chunkBytes > DELTA_MAX_CHUNK_BYTES ||
         this->m_oldSize > DELTA_MAX_IMAGE_SIZE || this->m_newSize > DELTA_MAX_IMAGE_SIZE) {
         return this->fail(BAD_HEADER);
     }
-    this->m_chunkCount =
-        static_cast<U32>((static_cast<U64>(this->m_newSize) + this->m_chunkBytes - 1) / this->m_chunkBytes);
+    // Sizes are capped at DELTA_MAX_IMAGE_SIZE above, so this cannot wrap
+    this->m_chunkCount = (this->m_newSize + this->m_chunkBytes - 1) / this->m_chunkBytes;
     this->m_patchPos = HEADER_SIZE;
 
     FwSizeType oldSize = 0;
@@ -134,7 +146,7 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
     if (newSize == this->m_newSize) {
         this->m_verifyChunks = this->m_chunkCount;
     } else {
-        this->m_verifyChunks = static_cast<U32>(newSize / this->m_chunkBytes);
+        this->m_verifyChunks = newSize / this->m_chunkBytes;
     }
     this->m_state = (this->m_verifyChunks > 0) ? VERIFY_NEW : VERIFY_OLD;
     return OP_OK;
@@ -164,8 +176,8 @@ DeltaCodec::Status DeltaCodec::step() {
 }
 
 FwSizeType DeltaCodec::bytesWritten() const {
-    const U64 written = static_cast<U64>(this->m_chunkIndex) * this->m_chunkBytes;
-    return static_cast<FwSizeType>((written > this->m_newSize) ? this->m_newSize : written);
+    const FwSizeType written = this->m_chunkIndex * this->m_chunkBytes;
+    return (written > this->m_newSize) ? this->m_newSize : written;
 }
 
 // ----------------------------------------------------------------------
@@ -186,8 +198,11 @@ DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc
     if (this->m_patch->read(this->m_patchPos, this->m_patchBuffer, CHUNK_HEADER_SIZE) != DeltaMedia::OP_OK) {
         return READ_ERROR;
     }
-    codedLength = readU32(this->m_patchBuffer + CHUNK_HDR_CODED_LENGTH);
-    crc = readU32(this->m_patchBuffer + CHUNK_HDR_CRC);
+    Fw::ExternalSerializeBuffer fields(this->m_patchBuffer, CHUNK_HEADER_SIZE);
+    if (fields.setBuffLen(CHUNK_HEADER_SIZE) != Fw::FW_SERIALIZE_OK ||
+        fields.deserializeTo(codedLength) != Fw::FW_SERIALIZE_OK || fields.deserializeTo(crc) != Fw::FW_SERIALIZE_OK) {
+        return BAD_OPCODE;
+    }
     if (codedLength > DELTA_MAX_CODED_CHUNK_BYTES) {
         return BAD_OPCODE;
     }
@@ -201,10 +216,9 @@ DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc
 DeltaCodec::Status DeltaCodec::verifyNewStep() {
     FwSizeType budget = DELTA_VERIFY_BYTES_PER_STEP;
     while (budget > 0 && this->m_chunkIndex < this->m_verifyChunks) {
-        const FwSizeType chunkStart = static_cast<FwSizeType>(this->m_chunkIndex) * this->m_chunkBytes;
-        const FwSizeType chunkLength = static_cast<FwSizeType>(((this->m_newSize - chunkStart) < this->m_chunkBytes)
-                                                                   ? (this->m_newSize - chunkStart)
-                                                                   : this->m_chunkBytes);
+        const FwSizeType chunkStart = this->m_chunkIndex * this->m_chunkBytes;
+        const FwSizeType chunkLength =
+            ((this->m_newSize - chunkStart) < this->m_chunkBytes) ? (this->m_newSize - chunkStart) : this->m_chunkBytes;
         FwSizeType remaining = chunkLength - this->m_verifyOffset;
         FwSizeType length = (remaining < DELTA_OUTPUT_BUFFER_SIZE) ? remaining : DELTA_OUTPUT_BUFFER_SIZE;
         length = (length < budget) ? length : budget;
@@ -249,7 +263,7 @@ DeltaCodec::Status DeltaCodec::verifyNewStep() {
 DeltaCodec::Status DeltaCodec::verifyOldStep() {
     FwSizeType budget = DELTA_VERIFY_BYTES_PER_STEP;
     while (budget > 0 && this->m_verifyOffset < this->m_oldSize) {
-        const FwSizeType remaining = static_cast<FwSizeType>(this->m_oldSize) - this->m_verifyOffset;
+        const FwSizeType remaining = this->m_oldSize - this->m_verifyOffset;
         FwSizeType length = (remaining < DELTA_OUTPUT_BUFFER_SIZE) ? remaining : DELTA_OUTPUT_BUFFER_SIZE;
         length = (length < budget) ? length : budget;
         if (this->m_old->read(this->m_verifyOffset, this->m_outBuffer, length) != DeltaMedia::OP_OK) {
@@ -289,7 +303,7 @@ DeltaCodec::Status DeltaCodec::finish() {
 DeltaCodec::Status DeltaCodec::verifyFinalStep() {
     FwSizeType budget = DELTA_VERIFY_BYTES_PER_STEP;
     while (budget > 0 && this->m_verifyOffset < this->m_newSize) {
-        const FwSizeType remaining = static_cast<FwSizeType>(this->m_newSize) - this->m_verifyOffset;
+        const FwSizeType remaining = this->m_newSize - this->m_verifyOffset;
         FwSizeType length = (remaining < DELTA_OUTPUT_BUFFER_SIZE) ? remaining : DELTA_OUTPUT_BUFFER_SIZE;
         length = (length < budget) ? length : budget;
         if (this->m_new->read(this->m_verifyOffset, this->m_outBuffer, length) != DeltaMedia::OP_OK) {
@@ -327,8 +341,8 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
     chunk.codedRemaining = chunk.codedLength;
     chunk.patchFill = 0;
     chunk.patchPos = 0;
-    chunk.newOffset = static_cast<FwSizeType>(this->m_chunkIndex) * this->m_chunkBytes;
-    const FwSizeType left = static_cast<FwSizeType>(this->m_newSize) - chunk.newOffset;
+    chunk.newOffset = this->m_chunkIndex * this->m_chunkBytes;
+    const FwSizeType left = this->m_newSize - chunk.newOffset;
     chunk.expected = (left < this->m_chunkBytes) ? left : this->m_chunkBytes;
     chunk.produced = 0;
     chunk.oldCursor = chunk.newOffset;
@@ -341,7 +355,7 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
     chunk.opCount = 0;
 
     this->m_coder->reset();
-    this->m_ring.reset();
+    this->m_window.reset();
 
     while (chunk.produced < chunk.expected) {
         status = chunk.opActive ? this->executeOp(chunk) : this->parseOp(chunk);
@@ -356,7 +370,7 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
         return this->fail(status);
     }
     // Everything declared for this chunk must have been consumed exactly
-    if (chunk.codedRemaining != 0 || chunk.patchPos != chunk.patchFill || this->m_ring.count() != 0) {
+    if (chunk.codedRemaining != 0 || chunk.patchPos != chunk.patchFill || this->m_window.count() != 0) {
         this->m_runningCrc = this->m_committedCrc;
         return this->fail(BAD_OPCODE);
     }
@@ -370,8 +384,8 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
     return OP_OK;
 }
 
-DeltaCodec::Status DeltaCodec::fillRing(Chunk& chunk) {
-    while (this->m_ring.space() > 0) {
+DeltaCodec::Status DeltaCodec::fillWindow(Chunk& chunk) {
+    while (this->m_window.space() > 0) {
         if (chunk.patchPos >= chunk.patchFill && chunk.codedRemaining > 0) {
             const FwSizeType length =
                 (chunk.codedRemaining < DELTA_PATCH_BUFFER_SIZE) ? chunk.codedRemaining : DELTA_PATCH_BUFFER_SIZE;
@@ -385,16 +399,16 @@ DeltaCodec::Status DeltaCodec::fillRing(Chunk& chunk) {
         }
         // Called even with no input left so a coder may drain pending output (e.g. an in-progress match)
         FwSizeType consumed = 0;
-        const FwSizeType before = this->m_ring.count();
+        const FwSizeType before = this->m_window.count();
         const FwSizeType available = chunk.patchFill - chunk.patchPos;
         const DeltaCoder::Status status =
-            this->m_coder->decode(this->m_patchBuffer + chunk.patchPos, available, consumed, this->m_ring);
+            this->m_coder->decode(this->m_patchBuffer + chunk.patchPos, available, consumed, this->m_window);
         if (status != DeltaCoder::OP_OK) {
             return BAD_OPCODE;
         }
         FW_ASSERT(consumed <= available, static_cast<FwAssertArgType>(consumed));
         chunk.patchPos += consumed;
-        if (consumed == 0 && this->m_ring.count() == before) {
+        if (consumed == 0 && this->m_window.count() == before) {
             // No progress: either input is exhausted (caller decides) or the coder is stuck on input it has
             return (available == 0) ? OP_OK : BAD_OPCODE;
         }
@@ -406,10 +420,10 @@ DeltaCodec::VarintResult DeltaCodec::readVarint(FwSizeType start, U64& value, Fw
     value = 0;
     length = 0;
     for (FwSizeType i = 0; i < VARINT_MAX_BYTES; i++) {
-        if (start + i >= this->m_ring.count()) {
+        if (start + i >= this->m_window.count()) {
             return VARINT_NEED_MORE;
         }
-        const U8 byte = this->m_ring.peek(start + i);
+        const U8 byte = this->m_window.peek(start + i);
         value |= static_cast<U64>(byte & 0x7F) << (7 * i);
         length = i + 1;
         if ((byte & 0x80) == 0) {
@@ -420,13 +434,13 @@ DeltaCodec::VarintResult DeltaCodec::readVarint(FwSizeType start, U64& value, Fw
 }
 
 DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
-    // Ensure the op byte and complete operand are decoded; the ring holds at least 6 bytes so this always fits
-    static_assert(DELTA_RING_SIZE > VARINT_MAX_BYTES, "Ring must hold an op byte and its operand");
+    // Ensure the op byte and complete operand are decoded; the window holds at least 6 bytes so this always fits
+    static_assert(DELTA_WINDOW_SIZE > VARINT_MAX_BYTES, "Window must hold an op byte and its operand");
     U64 operand = 0;
     FwSizeType operandLength = 0;
     while (true) {
         VarintResult result = VARINT_NEED_MORE;
-        if (this->m_ring.count() >= 1) {
+        if (this->m_window.count() >= 1) {
             result = this->readVarint(1, operand, operandLength);
         }
         if (result == VARINT_INVALID) {
@@ -434,17 +448,17 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
         } else if (result == VARINT_OK) {
             break;
         }
-        const FwSizeType before = this->m_ring.count();
-        const Status status = this->fillRing(chunk);
+        const FwSizeType before = this->m_window.count();
+        const Status status = this->fillWindow(chunk);
         if (status != OP_OK) {
             return status;
         }
-        if (this->m_ring.count() == before) {
+        if (this->m_window.count() == before) {
             return TRUNCATED;
         }
     }
-    const U8 opByte = this->m_ring.peek(0);
-    this->m_ring.pop(1 + operandLength);
+    const U8 opByte = this->m_window.peek(0);
+    this->m_window.pop(1 + operandLength);
     // Explicit work bound: every producing op emits at least one byte and at most one SEEK precedes it
     static_assert(DELTA_MAX_OPS_PER_CHUNK >= 2 * DELTA_MAX_CHUNK_BYTES, "Op cap must admit any valid chunk");
     chunk.opCount++;
@@ -491,16 +505,16 @@ DeltaCodec::Status DeltaCodec::executeOp(Chunk& chunk) {
     length = (length < outSpace) ? length : outSpace;
 
     if (chunk.op == OP_ADD || chunk.op == OP_LIT) {
-        if (this->m_ring.count() == 0) {
-            const Status status = this->fillRing(chunk);
+        if (this->m_window.count() == 0) {
+            const Status status = this->fillWindow(chunk);
             if (status != OP_OK) {
                 return status;
             }
-            if (this->m_ring.count() == 0) {
+            if (this->m_window.count() == 0) {
                 return TRUNCATED;
             }
         }
-        length = (length < this->m_ring.count()) ? length : this->m_ring.count();
+        length = (length < this->m_window.count()) ? length : this->m_window.count();
     }
     U8* out = this->m_outBuffer + chunk.outFill;
     if (chunk.op == OP_COPY || chunk.op == OP_ADD) {
@@ -514,11 +528,11 @@ DeltaCodec::Status DeltaCodec::executeOp(Chunk& chunk) {
     }
     if (chunk.op == OP_ADD) {
         for (FwSizeType i = 0; i < length; i++) {
-            out[i] = static_cast<U8>(out[i] + this->m_ring.peek(i));
+            out[i] = static_cast<U8>(out[i] + this->m_window.peek(i));
         }
-        this->m_ring.pop(length);
+        this->m_window.pop(length);
     } else if (chunk.op == OP_LIT) {
-        this->m_ring.popInto(out, length);
+        this->m_window.popInto(out, length);
     }
     chunk.outFill += length;
     chunk.produced += length;
@@ -560,11 +574,6 @@ U32 DeltaCodec::crcUpdate(U32 crc, const U8* data, FwSizeType length) {
 
 U32 DeltaCodec::crcFinal(U32 crc) {
     return ~crc;
-}
-
-U32 DeltaCodec::readU32(const U8* data) {
-    return static_cast<U32>(data[0]) | (static_cast<U32>(data[1]) << 8) | (static_cast<U32>(data[2]) << 16) |
-           (static_cast<U32>(data[3]) << 24);
 }
 
 }  // namespace Update

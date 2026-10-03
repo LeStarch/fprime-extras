@@ -68,16 +68,21 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   valid header naming a different coder is rejected with `CODER_MISMATCH` (distinct from `BAD_HEADER`, which
   indicates corruption or an out-of-range geometry).
 
-### SPatch v1 container
+### SPatch v2 container
 
-All integers little-endian. CRC is IEEE 802.3 CRC32 (`Utils::crc32_ieee802_3`).
+Integers are serialized F Prime style: big-endian, with sizes carried as `FwSizeType` (`W` = `sizeof(FwSizeType)`,
+4 or 8, recorded in the header so a patch built for the wrong width is rejected with `SIZE_WIDTH_MISMATCH`) and
+CRCs as fixed `U32`. CRC is IEEE 802.3 CRC32 (`Utils::crc32_ieee802_3`). The flight side decodes the fields with
+`Fw::ExternalSerializeBuffer`; the ground tool takes the width from the deployment dictionary (`--dictionary`) or
+`--size-width`.
 
 ```
-Header (32 B): "SPAT" | version U8 = 1 | coder_id U8 | flags U8 = 0 | reserved U8 = 0
-               | old_size U32 | old_crc32 U32 | new_size U32 | new_crc32 U32
-               | chunk_bytes U32 | header_crc32 U32 (over the first 28 bytes)
-Chunk (repeated ceil(new_size / chunk_bytes) times):
-               coded_len U32 | output_crc32 U32 | payload[coded_len]
+Header (20 + 3W B; 32 B at W=4, 44 B at W=8):
+               "SPAT" | version U8 = 2 | coder_id U8 | flags U8 = 0 | size_width U8 = W
+               | old_size FwSizeType | old_crc32 U32 | new_size FwSizeType | new_crc32 U32
+               | chunk_bytes FwSizeType | header_crc32 U32 (over all preceding header bytes)
+Chunk (W + 4 B header, repeated ceil(new_size / chunk_bytes) times):
+               coded_len FwSizeType | output_crc32 U32 | payload[coded_len]
 ```
 
 Each chunk's payload is independently decoded by the coder and produces exactly `chunk_bytes` bytes (the final
@@ -137,7 +142,7 @@ possible without touching the patch payload.
 | `State` | `DeltaPatchState` | IDLE / PATCHING / FAILED / COMPLETE |
 | `ChunksDone` | U32 | Chunks verified or written |
 | `ChunksTotal` | U32 | Chunk count from header |
-| `BytesWritten` | U64 | New-image bytes written or verified so far (chunk granularity) |
+| `BytesWritten` | FwSizeType | New-image bytes written or verified so far (chunk granularity) |
 | `LastStatus` | `DeltaPatchStatus` | Last terminal status |
 
 ## Configuration
@@ -147,7 +152,7 @@ possible without touching the patch payload.
 | Constant | Default | Purpose |
 | --- | --- | --- |
 | `DELTA_PATCH_BUFFER_SIZE` | 256 | Coded patch read buffer |
-| `DELTA_RING_SIZE` | 256 | Decoded op stream ring / LZSS window |
+| `DELTA_WINDOW_SIZE` | 256 | Decoded op stream window / LZSS history (`DeltaWindow` over `Types::CircularBuffer`) |
 | `DELTA_OUTPUT_BUFFER_SIZE` | 256 | Output staging buffer; also the old-image read granularity (COPY/ADD, CRC) |
 | `DELTA_VERIFY_BYTES_PER_STEP` | 4096 | CRC bytes per `run` tick during verification |
 | `DELTA_MAX_CHUNK_BYTES` | 8192 | Largest header `chunk_bytes` accepted; bounds output bytes per `run` tick |
@@ -155,7 +160,7 @@ possible without touching the patch payload.
 | `DELTA_MAX_OPS_PER_CHUNK` | 16384 | Most operations parsed per chunk; explicit per-tick work bound (2 per output byte suffices) |
 | `DELTA_MAX_IMAGE_SIZE` | 64 MiB | Largest old/new image accepted; bounds storage used by `new_file` |
 
-RAM (measured, x86-64): `DeltaCodec` 928 B + `DeltaCoderLzss` 32 B = 960 B. `Os::File` handles inside
+RAM (measured, x86-64, 64-bit `FwSizeType`): `DeltaCodec` 968 B + `DeltaCoderLzss` 32 B = 1000 B. `Os::File` handles inside
 `DeltaFileMedia` are platform-owned and outside this budget.
 
 ## Ground tooling

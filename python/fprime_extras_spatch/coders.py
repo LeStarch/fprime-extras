@@ -1,4 +1,4 @@
-"""SPatch v1 payload coders: none, RLE, and 256-byte-window LZSS.
+"""SPatch payload coders: none, RLE, and 256-byte-window LZSS.
 
 Copyright (c) 2026 Michael Starch
 

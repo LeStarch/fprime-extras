@@ -31,7 +31,8 @@ module Update {
         OUTPUT_STALE,       @< Existing new file is larger than the header's new size
         ABORTED,            @< Operator abort
         SAME_FILE,          @< old_file, patch_file and new_file must be distinct
-        CODER_MISMATCH      @< Valid header names a coder other than the one installed in flight
+        CODER_MISMATCH,     @< Valid header names a coder other than the one installed in flight
+        SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
     }
 
     @ State of the DeltaPatcher

@@ -1,7 +1,7 @@
 // ======================================================================
 // \title  DeltaTestMain.cpp
 // \author starchmd
-// \brief  Unit tests for DeltaRing, the shipped DeltaCoders, DeltaFileMedia,
+// \brief  Unit tests for DeltaWindow, the shipped DeltaCoders, DeltaFileMedia,
 // and the DeltaCodec engine
 // \copyright Copyright (c) 2026 Michael Starch
 // ======================================================================
@@ -101,8 +101,8 @@ static DeltaCoder::Status decodeAll(DeltaCoder &coder, const U8 *coded,
                                     FwSizeType codedSize, FwSizeType pieceSize,
                                     FwSizeType drainSize,
                                     std::vector<U8> &out) {
-  U8 storage[DELTA_RING_SIZE];
-  DeltaRing ring(storage, sizeof storage);
+  U8 storage[DELTA_WINDOW_SIZE];
+  DeltaWindow ring(storage, sizeof storage);
   ring.reset();
   coder.reset();
   FwSizeType pos = 0;
@@ -131,12 +131,11 @@ static DeltaCoder::Status decodeAll(DeltaCoder &coder, const U8 *coded,
 }
 
 // ----------------------------------------------------------------------
-// DeltaRing
+// DeltaWindow
 // ----------------------------------------------------------------------
-
-TEST(DeltaRing, PushPeekPopHistory) {
+TEST(DeltaWindow, PushPeekPopHistory) {
   U8 storage[8];
-  DeltaRing ring(storage, sizeof storage);
+  DeltaWindow ring(storage, sizeof storage);
   ring.reset();
   EXPECT_EQ(ring.capacity(), 8u);
   EXPECT_EQ(ring.count(), 0u);
@@ -158,6 +157,7 @@ TEST(DeltaRing, PushPeekPopHistory) {
   EXPECT_EQ(ring.historyAvailable(), 8u);
   ring.push(9);
   ring.push(10);
+  EXPECT_EQ(ring.count(), 5u);
   EXPECT_EQ(ring.history(1), 10);
   EXPECT_EQ(ring.history(8), 3);
   U8 out[5];
@@ -165,14 +165,20 @@ TEST(DeltaRing, PushPeekPopHistory) {
   EXPECT_EQ(out[0], 6);
   EXPECT_EQ(out[4], 10);
   EXPECT_EQ(ring.count(), 0u);
+  EXPECT_EQ(ring.space(), 8u);
+  EXPECT_EQ(ring.historyAvailable(), 8u);
   ring.reset();
   EXPECT_EQ(ring.historyAvailable(), 0u);
-  EXPECT_EQ(ring.history(1), 0);
+  EXPECT_EQ(ring.count(), 0u);
+  // History persists across many evictions: window holds exactly the last `capacity` pushes
+  for (U32 i = 0; i < 1000; i++) {
+    ring.push(static_cast<U8>(i));
+    ring.pop(1);
+  }
+  EXPECT_EQ(ring.historyAvailable(), 8u);
+  EXPECT_EQ(ring.history(1), static_cast<U8>(999));
+  EXPECT_EQ(ring.history(8), static_cast<U8>(992));
 }
-
-// ----------------------------------------------------------------------
-// Coders
-// ----------------------------------------------------------------------
 
 static void checkCoder(DeltaCoder &coder, const U8 *coded,
                        FwSizeType codedSize) {
@@ -297,7 +303,7 @@ TEST(DeltaCodec, MemoryFootprint) {
   // REQ: engine + coder state fits the constrained-system budget with default
   // configuration
   const FwSizeType buffers =
-      DELTA_PATCH_BUFFER_SIZE + DELTA_RING_SIZE + DELTA_OUTPUT_BUFFER_SIZE;
+      DELTA_PATCH_BUFFER_SIZE + DELTA_WINDOW_SIZE + DELTA_OUTPUT_BUFFER_SIZE;
   printf("sizeof(DeltaCodec)=%zu buffers=%zu Lzss=%zu Rle=%zu None=%zu "
          "FileMedia=%zu\n",
          sizeof(DeltaCodec), static_cast<size_t>(buffers),
@@ -389,7 +395,7 @@ TEST(DeltaCodec, RejectsBadHeader) {
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
-  patch[4] = 2; // version
+  patch[DeltaCodec::HDR_VERSION] = DeltaCodec::VERSION + 1;
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
@@ -397,7 +403,7 @@ TEST(DeltaCodec, RejectsBadHeader) {
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
-  patch[16] ^= 0x01; // new_size, breaks header CRC
+  patch[DeltaCodec::HDR_NEW_SIZE] ^= 0x01; // new_size, breaks header CRC
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
@@ -410,18 +416,37 @@ TEST(DeltaCodec, RejectsBadHeader) {
   EXPECT_EQ(state, DeltaCodec::FAILED);
 }
 
-// Rewrite a little-endian U32 header field and recompute the header CRC so only
+// Write an F Prime serialized (big-endian) value of `width` bytes
+static void putBe(U8 *dest, U64 value, FwSizeType width) {
+  for (FwSizeType i = 0; i < width; i++) {
+    dest[i] = static_cast<U8>(value >> (8 * (width - 1 - i)));
+  }
+}
+
+// Rewrite a size (FwSizeType) header field and recompute the header CRC so only
 // the geometry check can fail
-static void setHeaderField(std::vector<U8> &patch, FwSizeType offset,
-                           U32 value) {
-  for (FwSizeType i = 0; i < 4; i++) {
-    patch[offset + i] = static_cast<U8>(value >> (8 * i));
-  }
+static void setHeaderSize(std::vector<U8> &patch, FwSizeType offset,
+                          FwSizeType value) {
+  putBe(&patch[offset], value, DeltaCodec::SIZE_FIELD_WIDTH);
   U32 crc = 0;
-  Utils::crc32_ieee802_3_update(patch.data(), DeltaCodec::HEADER_SIZE - 4, crc);
-  for (FwSizeType i = 0; i < 4; i++) {
-    patch[DeltaCodec::HEADER_SIZE - 4 + i] = static_cast<U8>(crc >> (8 * i));
-  }
+  Utils::crc32_ieee802_3_update(patch.data(), DeltaCodec::HDR_CRC, crc);
+  putBe(&patch[DeltaCodec::HDR_CRC], crc, sizeof(U32));
+}
+
+TEST(DeltaCodec, RejectsSizeWidthMismatch) {
+  // A patch built for the other FwSizeType width is reported distinctly, before
+  // any size field is interpreted
+  DeltaCoderNone coder;
+  const std::vector<U8> oldImage =
+      toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+  const std::vector<U8> other =
+      (sizeof(FwSizeType) == 8)
+          ? toVector(TestVectors::PATCH_NONE_W4, TestVectors::PATCH_NONE_W4_SIZE)
+          : toVector(TestVectors::PATCH_NONE_W8, TestVectors::PATCH_NONE_W8_SIZE);
+  DeltaCodec::State state;
+  EXPECT_EQ(applyPatch(coder, other, oldImage, state),
+            DeltaCodec::SIZE_WIDTH_MISMATCH);
+  EXPECT_EQ(state, DeltaCodec::FAILED);
 }
 
 TEST(DeltaCodec, RejectsOversizedGeometry) {
@@ -433,30 +458,28 @@ TEST(DeltaCodec, RejectsOversizedGeometry) {
   DeltaCodec::State state;
 
   std::vector<U8> patch = good;
-  setHeaderField(patch, 24,
-                 DELTA_MAX_CHUNK_BYTES + 1); // chunk_bytes above the flight cap
+  setHeaderSize(patch, DeltaCodec::HDR_CHUNK_BYTES,
+                DELTA_MAX_CHUNK_BYTES + 1); // chunk_bytes above the flight cap
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
-  setHeaderField(patch, 24, 0); // chunk_bytes == 0
+  setHeaderSize(patch, DeltaCodec::HDR_CHUNK_BYTES, 0); // chunk_bytes == 0
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
-  setHeaderField(patch, 8, DELTA_MAX_IMAGE_SIZE + 1); // old_size
+  setHeaderSize(patch, DeltaCodec::HDR_OLD_SIZE, DELTA_MAX_IMAGE_SIZE + 1); // old_size
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   patch = good;
-  setHeaderField(patch, 16, DELTA_MAX_IMAGE_SIZE + 1); // new_size
+  setHeaderSize(patch, DeltaCodec::HDR_NEW_SIZE, DELTA_MAX_IMAGE_SIZE + 1); // new_size
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_HEADER);
 
   // coded_len above the per-chunk cap must be rejected before any offset
-  // arithmetic; a value near U32 max would wrap a naive (pos + header +
-  // coded_len) comparison
+  // arithmetic; a value near the FwSizeType max would wrap a naive (pos +
+  // header + coded_len) comparison
   patch = good;
-  const U32 huge = 0xFFFFFFF0u;
-  for (FwSizeType i = 0; i < 4; i++) {
-    patch[DeltaCodec::HEADER_SIZE + i] = static_cast<U8>(huge >> (8 * i));
-  }
+  const FwSizeType huge = static_cast<FwSizeType>(0) - 16;
+  putBe(&patch[DeltaCodec::HEADER_SIZE], huge, DeltaCodec::SIZE_FIELD_WIDTH);
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_OPCODE);
   EXPECT_EQ(state, DeltaCodec::FAILED);
 }
@@ -471,8 +494,15 @@ static U32 crcOf(const U8 *data, FwSizeType length) {
 }
 
 static void putU32(std::vector<U8> &out, U32 value) {
-  for (FwSizeType i = 0; i < 4; i++) {
-    out.push_back(static_cast<U8>(value >> (8 * i)));
+  for (FwSizeType i = 0; i < sizeof(U32); i++) {
+    out.push_back(static_cast<U8>(value >> (8 * (sizeof(U32) - 1 - i))));
+  }
+}
+
+static void putSize(std::vector<U8> &out, FwSizeType value) {
+  for (FwSizeType i = 0; i < DeltaCodec::SIZE_FIELD_WIDTH; i++) {
+    out.push_back(
+        static_cast<U8>(value >> (8 * (DeltaCodec::SIZE_FIELD_WIDTH - 1 - i))));
   }
 }
 
@@ -499,20 +529,23 @@ static void putCopy(std::vector<U8> &out, U64 length) {
 //! with chunk CRCs taken from `newImage`
 static std::vector<U8>
 buildNonePatch(const std::vector<U8> &oldImage, const std::vector<U8> &newImage,
-               U32 chunkBytes, const std::vector<std::vector<U8>> &chunks) {
-  std::vector<U8> patch = {'S', 'P', 'A', 'T', 1, DeltaCoder::ID_NONE, 0, 0};
-  putU32(patch, static_cast<U32>(oldImage.size()));
+               FwSizeType chunkBytes,
+               const std::vector<std::vector<U8>> &chunks) {
+  std::vector<U8> patch = {'S', 'P', 'A', 'T', DeltaCodec::VERSION,
+                           DeltaCoder::ID_NONE, 0,
+                           static_cast<U8>(DeltaCodec::SIZE_FIELD_WIDTH)};
+  putSize(patch, oldImage.size());
   putU32(patch, crcOf(oldImage.data(), oldImage.size()));
-  putU32(patch, static_cast<U32>(newImage.size()));
+  putSize(patch, newImage.size());
   putU32(patch, crcOf(newImage.data(), newImage.size()));
-  putU32(patch, chunkBytes);
+  putSize(patch, chunkBytes);
   putU32(patch, crcOf(patch.data(), patch.size()));
   for (FwSizeType i = 0; i < chunks.size(); i++) {
     const FwSizeType start = i * chunkBytes;
     const FwSizeType length = ((newImage.size() - start) < chunkBytes)
                                   ? (newImage.size() - start)
                                   : chunkBytes;
-    putU32(patch, static_cast<U32>(chunks[i].size()));
+    putSize(patch, chunks[i].size());
     putU32(patch, crcOf(newImage.data() + start, length));
     patch.insert(patch.end(), chunks[i].begin(), chunks[i].end());
   }
@@ -649,10 +682,8 @@ TEST(DeltaCodec, RejectsConsecutiveSeeks) {
   }
   std::vector<U8> patch = buildNonePatch(oldImage, oldImage, oldSize, {coded});
   patch[5] = DeltaCoder::ID_LZSS;
-  const U32 headerCrc = crcOf(patch.data(), DeltaCodec::HDR_CRC);
-  for (FwSizeType i = 0; i < 4; i++) {
-    patch[DeltaCodec::HDR_CRC + i] = static_cast<U8>(headerCrc >> (8 * i));
-  }
+  putBe(&patch[DeltaCodec::HDR_CRC], crcOf(patch.data(), DeltaCodec::HDR_CRC),
+        sizeof(U32));
   MemoryMedia oldMedia(oldImage.data(), oldImage.size());
   MemoryMedia patchMedia(patch.data(), patch.size());
   MemoryMedia newMedia;
@@ -775,7 +806,7 @@ TEST(DeltaCodec, RejectsCorruptChunk) {
 
   // Corrupt chunk 0's declared output CRC
   std::vector<U8> patch = good;
-  patch[DeltaCodec::HEADER_SIZE + 4] ^= 0x01;
+  patch[DeltaCodec::HEADER_SIZE + DeltaCodec::CHUNK_HDR_CRC] ^= 0x01;
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::CHUNK_CRC);
 
   // Corrupt an op byte (first payload byte) into an unknown opcode

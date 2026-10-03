@@ -15,10 +15,12 @@ fprime-extras-spatch apply  old.bin update.spatch out.bin            # reference
 
 `--chunk-bytes` (default 4096) trades a little compression for finer-grained resume and shorter per-tick work on
 the flight side. The coder must match the coder installed in the flight `DeltaPatcher` (LZSS by default).
+Sizes are serialized as the flight build's `FwSizeType`: pass `--dictionary <deployment dictionary.json>` to read
+its width, or `--size-width 4|8` (default 8); a mismatch is rejected on board with `SIZE_WIDTH_MISMATCH`.
 
 ## Format
 
-See `FprimeExtras/Update/DeltaPatcher/docs/sdd.md` for the SPatch v1 container, operation and coder formats. The
+See `FprimeExtras/Update/DeltaPatcher/docs/sdd.md` for the SPatch v2 container, operation and coder formats. The
 C++ decoder in `FprimeExtras/Update/Delta/` is the flight implementation; `spatch.py`/`coders.py` are the
 reference implementation; `FprimeExtras/Update/Delta/test/ut/generate_vectors.py` (run after `pip install ./python`,
 with the `bsdiff4` version it records) emits ground-produced vectors that `DeltaTestMain.cpp` checks the flight

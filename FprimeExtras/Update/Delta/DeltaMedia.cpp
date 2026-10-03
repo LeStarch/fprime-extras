@@ -71,8 +71,9 @@ DeltaMedia::Status DeltaFileMedia::read(FwSizeType offset, U8* buffer, FwSizeTyp
     if (this->m_reader.seek_absolute(offset) != Os::File::OP_OK) {
         return IO_ERROR;
     }
+    // Each pass transfers at least one byte or returns, so `length` passes bound the loop
     FwSizeType total = 0;
-    while (total < length) {
+    for (FwSizeType pass = 0; pass < length && total < length; pass++) {
         FwSizeType requested = length - total;
         const Os::File::Status status = this->m_reader.read(buffer + total, requested, Os::File::WaitType::WAIT);
         if (status != Os::File::OP_OK) {
@@ -83,7 +84,7 @@ DeltaMedia::Status DeltaFileMedia::read(FwSizeType offset, U8* buffer, FwSizeTyp
         }
         total += requested;
     }
-    return OP_OK;
+    return (total == length) ? OP_OK : IO_ERROR;
 }
 
 DeltaMedia::Status DeltaFileMedia::write(FwSizeType offset, const U8* buffer, FwSizeType length) {
@@ -94,8 +95,9 @@ DeltaMedia::Status DeltaFileMedia::write(FwSizeType offset, const U8* buffer, Fw
     if (this->m_writer.seek_absolute(offset) != Os::File::OP_OK) {
         return IO_ERROR;
     }
+    // Each pass transfers at least one byte or returns, so `length` passes bound the loop
     FwSizeType total = 0;
-    while (total < length) {
+    for (FwSizeType pass = 0; pass < length && total < length; pass++) {
         FwSizeType requested = length - total;
         const Os::File::Status status = this->m_writer.write(buffer + total, requested, Os::File::WaitType::WAIT);
         if (status != Os::File::OP_OK) {
@@ -106,7 +108,7 @@ DeltaMedia::Status DeltaFileMedia::write(FwSizeType offset, const U8* buffer, Fw
         }
         total += requested;
     }
-    return OP_OK;
+    return (total == length) ? OP_OK : IO_ERROR;
 }
 
 DeltaMedia::Status DeltaFileMedia::flush() {

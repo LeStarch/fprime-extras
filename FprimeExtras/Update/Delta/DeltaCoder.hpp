@@ -7,16 +7,16 @@
 #ifndef Update_Delta_DeltaCoder_HPP
 #define Update_Delta_DeltaCoder_HPP
 
-#include "FprimeExtras/Update/Delta/DeltaRing.hpp"
+#include "FprimeExtras/Update/Delta/DeltaWindow.hpp"
 #include "Fw/FPrimeBasicTypes.hpp"
 
 namespace Update {
 
 //! \brief Streaming decompressor for SPatch chunk payloads
 //!
-//! The DeltaCodec feeds coded bytes in and receives decoded operation bytes in a DeltaRing. Implementations must
-//! be allocation-free and hold all state in members so that decoding may pause at any byte boundary (input
-//! exhausted or ring full) and resume later. reset() is called at the start of every chunk.
+//! The DeltaCodec feeds coded bytes in and receives decoded operation bytes in a DeltaWindow. Implementations must be
+//! allocation-free and hold all state in members so that decoding may pause at any byte boundary (input exhausted or
+//! window full) and resume later. reset() is called at the start of every chunk.
 //!
 //! Projects supply their own coder by implementing this interface and passing it to DeltaPatcher. The coder id
 //! written in the SPatch header by the ground tool must equal id().
@@ -32,7 +32,7 @@ class DeltaCoder {
     enum Id : U8 {
         ID_NONE = 0,  //!< Pass-through
         ID_RLE = 1,   //!< Byte run-length encoding
-        ID_LZSS = 2   //!< LZSS, fixed 256-byte window held in the ring history
+        ID_LZSS = 2   //!< LZSS, fixed 256-byte window held in the window history
     };
 
     virtual ~DeltaCoder() = default;
@@ -45,9 +45,9 @@ class DeltaCoder {
 
     //! \brief Decode as much as possible
     //!
-    //! Consumes bytes from `in` (setting `consumed`) and pushes decoded bytes into `ring` until input is exhausted
-    //! or the ring has no space. Must make progress whenever both input and space are available.
-    virtual Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) = 0;
+    //! Consumes bytes from `in` (setting `consumed`) and pushes decoded bytes into `window` until input is exhausted or
+    //! the window has no space. Must make progress whenever both input and space are available.
+    virtual Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) = 0;
 };
 
 //! \brief Pass-through coder (id 0)
@@ -55,7 +55,7 @@ class DeltaCoderNone final : public DeltaCoder {
   public:
     U8 id() const override { return ID_NONE; }
     void reset() override {}
-    Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) override;
+    Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
 };
 
 //! \brief Byte run-length coder (id 1)
@@ -67,7 +67,7 @@ class DeltaCoderRle final : public DeltaCoder {
     DeltaCoderRle();
     U8 id() const override { return ID_RLE; }
     void reset() override;
-    Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) override;
+    Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
 
   private:
     enum Mode : U8 { CONTROL, LITERAL, REPEAT_VALUE, REPEAT };
@@ -76,12 +76,12 @@ class DeltaCoderRle final : public DeltaCoder {
     FwSizeType m_remaining;
 };
 
-//! \brief LZSS coder (id 2); its 256-byte window lives in the ring history (ring capacity must be >= WINDOW)
+//! \brief LZSS coder (id 2); its 256-byte window lives in the window history (window capacity must be >= WINDOW)
 //!
-//! Stream: flag byte, then 8 items MSB first. Flag bit 0 => one literal byte. Flag bit 1 => two bytes:
-//! distance-1 (distance 1..256) and length-3 (length 3..258); bytes are copied from `distance` back in history,
-//! overlapping allowed. The stream may end after any item; trailing unused flag bits are ignored. Requires a ring
-//! capacity of at least 256.
+//! Stream: flag byte, then 8 items MSB first. Flag bit 0 => one literal byte. Flag bit 1 => two bytes: distance-1
+//! (distance 1..256) and length-3 (length 3..258); bytes are copied from `distance` back in history, overlapping
+//! allowed. The stream may end after any item; trailing unused flag bits are ignored. Requires a window capacity of at
+//! least 256.
 class DeltaCoderLzss final : public DeltaCoder {
   public:
     static constexpr FwSizeType WINDOW = 256;
@@ -89,7 +89,7 @@ class DeltaCoderLzss final : public DeltaCoder {
     DeltaCoderLzss();
     U8 id() const override { return ID_LZSS; }
     void reset() override;
-    Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) override;
+    Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
 
   private:
     enum Mode : U8 { FLAGS, ITEM, MATCH_LENGTH, MATCH_COPY };

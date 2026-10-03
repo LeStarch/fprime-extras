@@ -20,7 +20,6 @@ The instance is resolved through the integration config key "Update.DeltaPatcher
 
 import os
 import random
-import struct
 import tempfile
 import zlib
 from pathlib import Path
@@ -69,13 +68,25 @@ def uplink(fprime_test_api, local, remote):
 
 
 @pytest.fixture
-def images(fprime_test_api):
+def size_width(request):
+    """FwSizeType width of the flight build, read from the deployment dictionary."""
+    return spatch.size_width_from_dictionary(request.config.getoption("--dictionary"))
+
+
+@pytest.fixture
+def images(fprime_test_api, size_width):
     os.makedirs(UPLINK_DIR, exist_ok=True)
     for path in (OLD_FILE, PATCH_FILE, NEW_FILE):
         if os.path.exists(path):
             os.unlink(path)
     old, new = make_images()
-    patch = spatch.create(old, new, coder_id=coders.ID_LZSS, chunk_bytes=CHUNK_BYTES)
+    patch = spatch.create(
+        old,
+        new,
+        coder_id=coders.ID_LZSS,
+        chunk_bytes=CHUNK_BYTES,
+        size_width=size_width,
+    )
     assert spatch.apply(old, patch) == new
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "old.bin").write_bytes(old)
@@ -120,10 +131,12 @@ def test_apply_patch_missing_old(fprime_test_api, images):
     fprime_test_api.assert_event(patcher(fprime_test_api, "PatchRejected"), None)
 
 
-def test_apply_patch_coder_mismatch(fprime_test_api, images):
+def test_apply_patch_coder_mismatch(fprime_test_api, images, size_width):
     """A valid patch built for a coder other than the installed one is rejected with CODER_MISMATCH."""
     old, new, _patch = images
-    rle = spatch.create(old, new, coder_id=coders.ID_RLE, chunk_bytes=CHUNK_BYTES)
+    rle = spatch.create(
+        old, new, coder_id=coders.ID_RLE, chunk_bytes=CHUNK_BYTES, size_width=size_width
+    )
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "u.spatch").write_bytes(rle)
         uplink(fprime_test_api, str(Path(tmp, "u.spatch")), PATCH_FILE)
@@ -139,16 +152,33 @@ def test_apply_patch_coder_mismatch(fprime_test_api, images):
     assert not Path(NEW_FILE).exists() or Path(NEW_FILE).stat().st_size == 0
 
 
+def test_apply_patch_size_width_mismatch(fprime_test_api, images, size_width):
+    """A patch serialized with the other FwSizeType width is rejected with SIZE_WIDTH_MISMATCH."""
+    old, new, _patch = images
+    other = next(w for w in spatch.SIZE_WIDTHS if w != size_width)
+    wrong = spatch.create(
+        old, new, coder_id=coders.ID_LZSS, chunk_bytes=CHUNK_BYTES, size_width=other
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "u.spatch").write_bytes(wrong)
+        uplink(fprime_test_api, str(Path(tmp, "u.spatch")), PATCH_FILE)
+    fprime_test_api.clear_histories()
+    send_and_await_error(fprime_test_api, [OLD_FILE, PATCH_FILE, NEW_FILE], timeout=30)
+    fprime_test_api.assert_event(
+        patcher(fprime_test_api, "PatchRejected"), ["SIZE_WIDTH_MISMATCH"]
+    )
+
+
 def test_apply_patch_corrupt_chunk_then_resume(fprime_test_api, images):
     """A corrupted chunk fails (CRC or malformed stream); re-uplinking a good patch resumes and completes."""
     _old, new, patch = images
     header = spatch.Header.unpack(patch)
     bad = bytearray(patch)
     # Flip a byte in the payload of the second chunk (zero-based chunk index 1)
-    offset = spatch.HEADER_SIZE
-    (coded_len,) = struct.unpack_from("<I", bad, offset)
-    offset += spatch.CHUNK_HEADER_SIZE + coded_len
-    bad[offset + spatch.CHUNK_HEADER_SIZE + 3] ^= 0xFF
+    offset = header.header_size
+    coded_len, _ = header.unpack_chunk_header(bad, offset)
+    offset += header.chunk_header_size + coded_len
+    bad[offset + header.chunk_header_size + 3] ^= 0xFF
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, "u.spatch").write_bytes(bad)
         uplink(fprime_test_api, str(Path(tmp, "u.spatch")), PATCH_FILE)

@@ -15,7 +15,7 @@ register_fprime_library(
         "${CMAKE_CURRENT_LIST_DIR}/DeltaMedia.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCodec.cpp"
     HEADERS
-        "${CMAKE_CURRENT_LIST_DIR}/DeltaRing.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaWindow.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCoder.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaMedia.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCodec.hpp"
@@ -23,6 +23,7 @@ register_fprime_library(
         Fw_Types
         Os
         Utils_Hash
+        Utils_Types
 )
 
 ### Unit Tests ###

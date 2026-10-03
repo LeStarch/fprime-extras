@@ -14,12 +14,10 @@ namespace Update {
 // DeltaCoderNone
 // ----------------------------------------------------------------------
 
-DeltaCoder::Status DeltaCoderNone::decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) {
+DeltaCoder::Status DeltaCoderNone::decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) {
     FW_ASSERT(in != nullptr || inLen == 0);
-    consumed = 0;
-    while (consumed < inLen && ring.space() > 0) {
-        ring.push(in[consumed]);
-        consumed++;
+    for (consumed = 0; consumed < inLen && window.space() > 0; consumed++) {
+        window.push(in[consumed]);
     }
     return OP_OK;
 }
@@ -36,10 +34,12 @@ void DeltaCoderRle::reset() {
     this->m_remaining = 0;
 }
 
-DeltaCoder::Status DeltaCoderRle::decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) {
+DeltaCoder::Status DeltaCoderRle::decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) {
     FW_ASSERT(in != nullptr || inLen == 0);
     consumed = 0;
-    while (true) {
+    // Every iteration consumes an input byte or emits an output byte, so this many iterations drain both
+    const FwSizeType maxIterations = inLen + window.space();
+    for (FwSizeType iteration = 0; iteration < maxIterations; iteration++) {
         switch (this->m_mode) {
             case CONTROL: {
                 if (consumed >= inLen) {
@@ -57,10 +57,10 @@ DeltaCoder::Status DeltaCoderRle::decode(const U8* in, FwSizeType inLen, FwSizeT
                 break;
             }
             case LITERAL:
-                if (consumed >= inLen || ring.space() == 0) {
+                if (consumed >= inLen || window.space() == 0) {
                     return OP_OK;
                 }
-                ring.push(in[consumed]);
+                window.push(in[consumed]);
                 consumed++;
                 this->m_remaining--;
                 if (this->m_remaining == 0) {
@@ -76,10 +76,10 @@ DeltaCoder::Status DeltaCoderRle::decode(const U8* in, FwSizeType inLen, FwSizeT
                 this->m_mode = REPEAT;
                 break;
             case REPEAT:
-                if (ring.space() == 0) {
+                if (window.space() == 0) {
                     return OP_OK;
                 }
-                ring.push(this->m_value);
+                window.push(this->m_value);
                 this->m_remaining--;
                 if (this->m_remaining == 0) {
                     this->m_mode = CONTROL;
@@ -90,6 +90,8 @@ DeltaCoder::Status DeltaCoderRle::decode(const U8* in, FwSizeType inLen, FwSizeT
                 return MALFORMED;
         }
     }
+    // Input and space are exhausted (the bound above is exact for the progress each iteration makes)
+    return OP_OK;
 }
 
 // ----------------------------------------------------------------------
@@ -106,11 +108,14 @@ void DeltaCoderLzss::reset() {
     this->m_remaining = 0;
 }
 
-DeltaCoder::Status DeltaCoderLzss::decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaRing& ring) {
+DeltaCoder::Status DeltaCoderLzss::decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) {
     FW_ASSERT(in != nullptr || inLen == 0);
-    FW_ASSERT(ring.capacity() >= WINDOW, static_cast<FwAssertArgType>(ring.capacity()));
+    FW_ASSERT(window.capacity() >= WINDOW, static_cast<FwAssertArgType>(window.capacity()));
     consumed = 0;
-    while (true) {
+    // Every iteration consumes an input byte, emits an output byte, or is the single ITEM->FLAGS transition that
+    // precedes one of those, so twice the available work (plus one) drains both input and space
+    const FwSizeType maxIterations = 2 * (inLen + window.space()) + 1;
+    for (FwSizeType iteration = 0; iteration < maxIterations; iteration++) {
         switch (this->m_mode) {
             case FLAGS:
                 if (consumed >= inLen) {
@@ -135,10 +140,10 @@ DeltaCoder::Status DeltaCoderLzss::decode(const U8* in, FwSizeType inLen, FwSize
                     consumed++;
                     this->m_mode = MATCH_LENGTH;
                 } else {
-                    if (ring.space() == 0) {
+                    if (window.space() == 0) {
                         return OP_OK;
                     }
-                    ring.push(in[consumed]);
+                    window.push(in[consumed]);
                     consumed++;
                     this->m_flags = static_cast<U8>(this->m_flags << 1);
                     this->m_bitsLeft--;
@@ -151,16 +156,16 @@ DeltaCoder::Status DeltaCoderLzss::decode(const U8* in, FwSizeType inLen, FwSize
                 }
                 this->m_remaining = static_cast<FwSizeType>(in[consumed]) + MIN_MATCH;
                 consumed++;
-                if (this->m_distance > ring.historyAvailable()) {
+                if (this->m_distance > window.historyAvailable()) {
                     return MALFORMED;
                 }
                 this->m_mode = MATCH_COPY;
                 break;
             case MATCH_COPY:
-                if (ring.space() == 0) {
+                if (window.space() == 0) {
                     return OP_OK;
                 }
-                ring.push(ring.history(this->m_distance));
+                window.push(window.history(this->m_distance));
                 this->m_remaining--;
                 if (this->m_remaining == 0) {
                     this->m_flags = static_cast<U8>(this->m_flags << 1);
@@ -173,6 +178,8 @@ DeltaCoder::Status DeltaCoderLzss::decode(const U8* in, FwSizeType inLen, FwSize
                 return MALFORMED;
         }
     }
+    // Input and space are exhausted (the bound above is exact for the progress each iteration makes)
+    return OP_OK;
 }
 
 }  // namespace Update

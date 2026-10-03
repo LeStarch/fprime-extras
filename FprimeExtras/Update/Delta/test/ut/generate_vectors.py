@@ -54,8 +54,16 @@ def main():
     print(f"static const U32 NEW_CRC = 0x{spatch.crc32(new):08X}u;\n")
     emit_array("OLD_IMAGE", old)
     emit_array("NEW_IMAGE", new)
+    # Patches for both FwSizeType widths; the unit test selects the one matching its build
     for name, cid in coders.NAMES.items():
-        emit_array(f"PATCH_{name.upper()}", spatch.create(old, new, cid, CHUNK_BYTES))
+        for width in spatch.SIZE_WIDTHS:
+            emit_array(f"PATCH_{name.upper()}_W{width}", spatch.create(old, new, cid, CHUNK_BYTES, size_width=width))
+        upper = name.upper()
+        print(f"static const U8* const PATCH_{upper} = (sizeof(FwSizeType) == 8) ? PATCH_{upper}_W8 : PATCH_{upper}_W4;")
+        print(
+            f"static const FwSizeType PATCH_{upper}_SIZE = "
+            f"(sizeof(FwSizeType) == 8) ? PATCH_{upper}_W8_SIZE : PATCH_{upper}_W4_SIZE;\n"
+        )
     # Standalone coder vectors: raw -> coded
     raw = bytes(range(256)) + b"\x00" * 300 + b"abcabcabcabcabcabd" * 10 + old[:500]
     emit_array("CODER_RAW", raw)

@@ -1,12 +1,14 @@
-"""SPatch v1 container: operation stream, chunking, creation and reference application.
+"""SPatch v2 container: operation stream, chunking, creation and reference application.
 
 Copyright (c) 2026 Michael Starch
 
-Format (all integers little-endian):
+Format (all integers F Prime serialized, i.e. big-endian; `size` is the flight FwSizeType, 4 or 8 bytes wide,
+its width recorded in the header so the flight rejects a patch built for the wrong width):
 
-    Header (32 B): "SPAT" | version U8=1 | coder_id U8 | flags U8=0 | reserved U8=0
-                   | old_size U32 | old_crc32 U32 | new_size U32 | new_crc32 U32 | chunk_bytes U32 | header_crc32 U32
-    Chunk (x ceil(new_size / chunk_bytes)): coded_len U32 | output_crc32 U32 | payload[coded_len]
+    Header (20 + 3 * W B): "SPAT" | version U8=2 | coder_id U8 | flags U8=0 | size_width U8=W
+                           | old_size size | old_crc32 U32 | new_size size | new_crc32 U32 | chunk_bytes size
+                           | header_crc32 U32 (over the preceding bytes)
+    Chunk (x ceil(new_size / chunk_bytes)): coded_len size | output_crc32 U32 | payload[coded_len]
 
 Each chunk's payload decodes (with the header's coder) into an operation stream producing exactly
 min(chunk_bytes, new_size - chunk_index * chunk_bytes) bytes of new image. At chunk start the old cursor
@@ -31,9 +33,37 @@ from typing import Iterable, Iterator
 from . import coders
 
 MAGIC = b"SPAT"
-VERSION = 1
-HEADER_SIZE = 32
-CHUNK_HEADER_SIZE = 8
+VERSION = 2
+SIZE_WIDTHS = (4, 8)  # sizeof(FwSizeType) on the flight build
+DEFAULT_SIZE_WIDTH = 8  # F Prime's default PlatformSizeType is 64-bit; pass --dictionary/--size-width otherwise
+_SIZE_FORMATS = {4: "I", 8: "Q"}
+
+
+def header_size(size_width: int) -> int:
+    """Header bytes for a given FwSizeType width: 36 (32-bit) or 48 (64-bit)"""
+    return 20 + 3 * size_width
+
+
+def chunk_header_size(size_width: int) -> int:
+    """Chunk header bytes for a given FwSizeType width: 8 (32-bit) or 12 (64-bit)"""
+    return size_width + 4
+
+
+def size_width_from_dictionary(path: str) -> int:
+    """Read sizeof(FwSizeType) from an F Prime JSON topology dictionary"""
+    import json
+
+    with open(path, encoding="utf-8") as handle:
+        dictionary = json.load(handle)
+    for definition in dictionary.get("typeDefinitions", []):
+        if definition.get("qualifiedName") == "FwSizeType":
+            bits = definition["underlyingType"]["size"]
+            if bits // 8 not in SIZE_WIDTHS:
+                raise SPatchError(f"dictionary FwSizeType is {bits} bits; SPatch supports 32 and 64")
+            return bits // 8
+    raise SPatchError("dictionary has no FwSizeType definition")
+
+
 DEFAULT_CHUNK_BYTES = 4096
 # Flight-side limits (must match ExtrasConfig/DeltaCodecConfig.hpp); patches exceeding them are rejected on board
 MAX_CHUNK_BYTES = 8192
@@ -206,43 +236,69 @@ class Header:
     new_size: int
     new_crc: int
     chunk_bytes: int
+    size_width: int = DEFAULT_SIZE_WIDTH
 
     @property
     def chunk_count(self) -> int:
         return (self.new_size + self.chunk_bytes - 1) // self.chunk_bytes
 
+    @property
+    def header_size(self) -> int:
+        return header_size(self.size_width)
+
+    @property
+    def chunk_header_size(self) -> int:
+        return chunk_header_size(self.size_width)
+
+    def _format(self) -> str:
+        size = _SIZE_FORMATS[self.size_width]
+        return f">BBBB{size}I{size}I{size}"
+
     def pack(self) -> bytes:
+        if self.size_width not in SIZE_WIDTHS:
+            raise SPatchError(f"size_width must be one of {SIZE_WIDTHS}")
         body = MAGIC + struct.pack(
-            "<BBBBIIIII",
+            self._format(),
             VERSION,
             self.coder_id,
             0,
-            0,
+            self.size_width,
             self.old_size,
             self.old_crc,
             self.new_size,
             self.new_crc,
             self.chunk_bytes,
         )
-        return body + struct.pack("<I", crc32(body))
+        return body + struct.pack(">I", crc32(body))
+
+    def pack_chunk_header(self, coded_len: int, out_crc: int) -> bytes:
+        return struct.pack(f">{_SIZE_FORMATS[self.size_width]}I", coded_len, out_crc)
+
+    def unpack_chunk_header(self, data: bytes, pos: int) -> tuple[int, int]:
+        return struct.unpack_from(f">{_SIZE_FORMATS[self.size_width]}I", data, pos)
 
     @classmethod
     def unpack(cls, data: bytes) -> Header:
-        if len(data) < HEADER_SIZE:
-            raise SPatchError("patch shorter than header")
-        if data[:4] != MAGIC:
+        if len(data) < 8 or data[:4] != MAGIC:
             raise SPatchError("bad magic")
-        version, coder_id, flags, reserved, old_size, old_crc, new_size, new_crc, chunk_bytes = struct.unpack(
-            "<BBBBIIIII", data[4:28]
-        )
-        (header_crc,) = struct.unpack("<I", data[28:32])
-        if version != VERSION or flags != 0 or reserved != 0:
+        version, flags, size_width = data[4], data[6], data[7]
+        if version != VERSION or flags != 0:
             raise SPatchError("unsupported version or flags")
-        if crc32(data[:28]) != header_crc:
+        if size_width not in SIZE_WIDTHS:
+            raise SPatchError(f"unsupported size width {size_width}")
+        total = header_size(size_width)
+        if len(data) < total:
+            raise SPatchError("patch shorter than header")
+        header = cls(0, 0, 0, 0, 0, 1, size_width)
+        _, coder_id, _, _, old_size, old_crc, new_size, new_crc, chunk_bytes = struct.unpack(
+            header._format(), data[4 : total - 4]
+        )
+        (header_crc,) = struct.unpack(">I", data[total - 4 : total])
+        if crc32(data[: total - 4]) != header_crc:
             raise SPatchError("header CRC mismatch")
         if chunk_bytes == 0:
             raise SPatchError("chunk_bytes must be positive")
-        return cls(coder_id, old_size, old_crc, new_size, new_crc, chunk_bytes)
+        return cls(coder_id, old_size, old_crc, new_size, new_crc, chunk_bytes, size_width)
 
 
 def create(
@@ -252,6 +308,7 @@ def create(
     chunk_bytes: int = DEFAULT_CHUNK_BYTES,
     copy_min: int = DEFAULT_COPY_MIN,
     ops: list[Op] | None = None,
+    size_width: int = DEFAULT_SIZE_WIDTH,
 ) -> bytes:
     if not 0 < chunk_bytes <= MAX_CHUNK_BYTES:
         raise SPatchError(f"chunk_bytes must be in 1..{MAX_CHUNK_BYTES} (flight DELTA_MAX_CHUNK_BYTES)")
@@ -259,7 +316,7 @@ def create(
         raise SPatchError(f"images must not exceed {MAX_IMAGE_SIZE} bytes (flight DELTA_MAX_IMAGE_SIZE)")
     if ops is None:
         ops = ops_from_bsdiff(old, new, copy_min)
-    header = Header(coder_id, len(old), crc32(old), len(new), crc32(new), chunk_bytes)
+    header = Header(coder_id, len(old), crc32(old), len(new), crc32(new), chunk_bytes, size_width)
     encode = coders.ENCODERS[coder_id]
     out = bytearray(header.pack())
     for index, raw in enumerate(chunk_ops(ops, len(old), len(new), chunk_bytes)):
@@ -268,18 +325,18 @@ def create(
         coded = encode(raw)
         if len(coded) > MAX_CODED_CHUNK_BYTES:
             raise SPatchError(f"chunk {index} coded to {len(coded)} bytes, above flight DELTA_MAX_CODED_CHUNK_BYTES")
-        out.extend(struct.pack("<II", len(coded), crc32(expected)))
+        out.extend(header.pack_chunk_header(len(coded), crc32(expected)))
         out.extend(coded)
     return bytes(out)
 
 
 def iter_chunks(patch: bytes, header: Header) -> Iterator[tuple[int, int, bytes]]:
-    pos = HEADER_SIZE
+    pos = header.header_size
     for _ in range(header.chunk_count):
-        if pos + CHUNK_HEADER_SIZE > len(patch):
+        if pos + header.chunk_header_size > len(patch):
             raise SPatchError("truncated chunk header")
-        coded_len, out_crc = struct.unpack("<II", patch[pos : pos + CHUNK_HEADER_SIZE])
-        pos += CHUNK_HEADER_SIZE
+        coded_len, out_crc = header.unpack_chunk_header(patch, pos)
+        pos += header.chunk_header_size
         if pos + coded_len > len(patch):
             raise SPatchError("truncated chunk payload")
         yield coded_len, out_crc, patch[pos : pos + coded_len]
@@ -366,6 +423,7 @@ def info(patch: bytes) -> dict:
         "old_crc32": f"0x{header.old_crc:08x}",
         "new_size": header.new_size,
         "new_crc32": f"0x{header.new_crc:08x}",
+        "size_width": header.size_width,
         "chunk_bytes": header.chunk_bytes,
         "chunk_count": header.chunk_count,
         "patch_size": len(patch),

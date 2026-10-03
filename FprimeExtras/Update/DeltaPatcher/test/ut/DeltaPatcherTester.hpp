@@ -99,8 +99,8 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Read a whole file
     static std::string readFile(const std::string& path);
 
-    //! Read a little-endian U32 from a SPatch chunk header
-    static U32 readLe32(const U8* data);
+    //! Read a big-endian FwSizeType from a SPatch chunk header
+    static FwSizeType readSize(const U8* data);
 
     //! Send APPLY_PATCH and tick `run` once so it is dispatched
     void apply(U32 cmdSeq);

@@ -21,7 +21,8 @@ def cmd_create(args: argparse.Namespace) -> int:
     old = _read(args.old)
     new = _read(args.new)
     ops = spatch.ops_literal(new) if args.matcher == "none" else spatch.ops_from_bsdiff(old, new, args.copy_min)
-    patch = spatch.create(old, new, coders.NAMES[args.coder], args.chunk_bytes, args.copy_min, ops)
+    size_width = spatch.size_width_from_dictionary(args.dictionary) if args.dictionary else args.size_width
+    patch = spatch.create(old, new, coders.NAMES[args.coder], args.chunk_bytes, args.copy_min, ops, size_width)
     Path(args.patch).write_bytes(patch)
     print(f"{args.patch}: {len(patch)} bytes ({len(patch) * 100.0 / max(1, len(new)):.1f}% of new image)")
     return 0
@@ -62,6 +63,15 @@ def main(argv=None) -> int:
     create.add_argument(
         "--copy-min", type=int, default=spatch.DEFAULT_COPY_MIN, help="minimum zero-delta run folded into a COPY op"
     )
+    width = create.add_mutually_exclusive_group()
+    width.add_argument(
+        "--size-width",
+        type=int,
+        choices=spatch.SIZE_WIDTHS,
+        default=spatch.DEFAULT_SIZE_WIDTH,
+        help="sizeof(FwSizeType) of the flight build (default %(default)s)",
+    )
+    width.add_argument("--dictionary", help="F Prime JSON topology dictionary from which to read the FwSizeType width")
     create.set_defaults(func=cmd_create)
 
     apply_ = sub.add_parser("apply", help="apply PATCH to OLD producing NEW (reference decoder)")

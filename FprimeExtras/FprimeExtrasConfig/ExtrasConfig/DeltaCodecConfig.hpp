@@ -12,8 +12,8 @@ namespace Update {
 //! Bytes of coded patch data read per media access
 constexpr FwSizeType DELTA_PATCH_BUFFER_SIZE = 256;
 
-//! Decoded operation ring; also the history window of the shipped LZSS coder (must be >= 256 for that coder)
-constexpr FwSizeType DELTA_RING_SIZE = 256;
+//! Decoded operation window; also the history window of the shipped LZSS coder (must be >= 256 for that coder)
+constexpr FwSizeType DELTA_WINDOW_SIZE = 256;
 
 //! Bytes of new image accumulated before each media write; also the old-image read granularity
 constexpr FwSizeType DELTA_OUTPUT_BUFFER_SIZE = 256;

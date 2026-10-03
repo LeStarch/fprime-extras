@@ -105,9 +105,9 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
     this->m_cmdSeq = cmdSeq;
     this->m_resumeReported = false;
     this->m_state = DeltaPatchState::PATCHING;
-    this->log_ACTIVITY_HI_PatchStarted(patch_file, old_file, new_file, this->m_codec.chunkCount());
+    this->log_ACTIVITY_HI_PatchStarted(patch_file, old_file, new_file, static_cast<U32>(this->m_codec.chunkCount()));
     this->tlmWrite_State(this->m_state);
-    this->tlmWrite_ChunksTotal(this->m_codec.chunkCount());
+    this->tlmWrite_ChunksTotal(static_cast<U32>(this->m_codec.chunkCount()));
     this->tlmWrite_ChunksDone(0);
     this->tlmWrite_BytesWritten(0);
     // Command response is deferred until the patch completes or fails
@@ -119,7 +119,7 @@ void DeltaPatcher ::ABORT_PATCH_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
         return;
     }
-    this->log_ACTIVITY_HI_PatchAborted(this->m_codec.chunkIndex());
+    this->log_ACTIVITY_HI_PatchAborted(static_cast<U32>(this->m_codec.chunkIndex()));
     this->finish(DeltaPatchState::IDLE, DeltaPatchStatus::ABORTED, Fw::CmdResponse::EXECUTION_ERROR);
     this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
 }
@@ -139,7 +139,7 @@ void DeltaPatcher ::ABORT_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq)
 
 void DeltaPatcher ::stepPatch() {
     const DeltaCodec::Status status = this->m_codec.step();
-    this->tlmWrite_ChunksDone(this->m_codec.chunkIndex());
+    this->tlmWrite_ChunksDone(static_cast<U32>(this->m_codec.chunkIndex()));
     this->tlmWrite_BytesWritten(this->m_codec.bytesWritten());
 
     switch (this->m_codec.state()) {
@@ -147,8 +147,8 @@ void DeltaPatcher ::stepPatch() {
             if (!this->m_resumeReported) {
                 this->m_resumeReported = true;
                 if (this->m_codec.resumedChunks() > 0) {
-                    this->log_ACTIVITY_HI_PatchResumed(this->m_newFile, this->m_codec.resumedChunks(),
-                                                       this->m_codec.chunkCount());
+                    this->log_ACTIVITY_HI_PatchResumed(this->m_newFile, static_cast<U32>(this->m_codec.resumedChunks()),
+                                                       static_cast<U32>(this->m_codec.chunkCount()));
                 }
             }
             break;
@@ -167,9 +167,9 @@ void DeltaPatcher ::stepPatch() {
                 FwSizeType actualSize = 0;
                 (void)this->m_oldMedia.size(actualSize);
                 this->log_WARNING_HI_OldImageMismatch(this->m_codec.oldCrc(), this->m_codec.actualOldCrc(),
-                                                      this->m_codec.oldSize(), static_cast<U64>(actualSize));
+                                                      this->m_codec.oldSize(), actualSize);
             } else {
-                this->log_WARNING_HI_ChunkFailed(this->m_codec.chunkIndex(), reported);
+                this->log_WARNING_HI_ChunkFailed(static_cast<U32>(this->m_codec.chunkIndex()), reported);
             }
             this->finish(DeltaPatchState::FAILED, reported, Fw::CmdResponse::EXECUTION_ERROR);
             break;
@@ -224,6 +224,8 @@ DeltaPatchStatus DeltaPatcher ::toStatus(DeltaCodec::Status status) {
             return DeltaPatchStatus::OUTPUT_STALE;
         case DeltaCodec::CODER_MISMATCH:
             return DeltaPatchStatus::CODER_MISMATCH;
+        case DeltaCodec::SIZE_WIDTH_MISMATCH:
+            return DeltaPatchStatus::SIZE_WIDTH_MISMATCH;
         default:
             FW_ASSERT(0, static_cast<FwAssertArgType>(status));
             return DeltaPatchStatus::BAD_OPCODE;

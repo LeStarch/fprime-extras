@@ -60,8 +60,8 @@ module Update {
         event OldImageMismatch(
             expected_crc: U32 @< CRC declared by the patch
             actual_crc: U32 @< CRC of the on-board old image
-            expected_size: U32 @< Size declared by the patch
-            actual_size: U64 @< Size of the on-board old image
+            expected_size: FwSizeType @< Size declared by the patch
+            actual_size: FwSizeType @< Size of the on-board old image
         ) severity warning high format "Old image mismatch: crc {x} != {x}, size {} != {}"
 
         @ A chunk failed to apply; patching stops
@@ -73,7 +73,7 @@ module Update {
         @ The new image was produced and verified
         event PatchComplete(
             new_file: string size FileNameStringSize @< New image file
-            new_size: U32 @< Size of the new image
+            new_size: FwSizeType @< Size of the new image
             crc32: U32 @< CRC32 of the new image
         ) severity activity high format "Patch complete: {} ({} bytes, crc {x})"
 
@@ -97,7 +97,7 @@ module Update {
         telemetry ChunksTotal: U32 update on change
 
         @ New-image bytes written or verified so far
-        telemetry BytesWritten: U64 update on change
+        telemetry BytesWritten: FwSizeType update on change
 
         @ Outcome of the last patch operation
         telemetry LastStatus: DeltaPatchStatus update on change

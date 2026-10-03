@@ -1,7 +1,7 @@
 // ======================================================================
 // \title  DeltaCodec.hpp
 // \author starchmd
-// \brief  hpp file for the SPatch v1 streaming patch engine
+// \brief  hpp file for the SPatch v2 streaming patch engine
 // \copyright Copyright (c) 2026 Michael Starch
 // ======================================================================
 #ifndef Update_Delta_DeltaCodec_HPP
@@ -10,12 +10,12 @@
 #include "ExtrasConfig/DeltaCodecConfig.hpp"
 #include "FprimeExtras/Update/Delta/DeltaCoder.hpp"
 #include "FprimeExtras/Update/Delta/DeltaMedia.hpp"
-#include "FprimeExtras/Update/Delta/DeltaRing.hpp"
+#include "FprimeExtras/Update/Delta/DeltaWindow.hpp"
 #include "Fw/FPrimeBasicTypes.hpp"
 
 namespace Update {
 
-//! \brief Allocation-free, bounded-step SPatch v1 engine
+//! \brief Allocation-free, bounded-step SPatch v2 engine
 //!
 //! Applies an SPatch (format: FprimeExtras/Update/DeltaPatcher/docs/sdd.md) held in `patch` media to the `oldImage`
 //! media producing the `newImage` media. Work is performed in step() calls, each bounded to one chunk (or
@@ -42,7 +42,8 @@ class DeltaCodec final {
         NEW_IMAGE_MISMATCH,  //!< Final new image CRC, or stored size/CRC on read-back, differs from the header
         PATCH_SIZE_MISMATCH,  //!< Patch has bytes beyond the last chunk
         OUTPUT_STALE,         //!< Existing new image is larger than the target; caller must recreate it
-        CODER_MISMATCH        //!< Header is valid but names a coder other than the installed one
+        CODER_MISMATCH,       //!< Header is valid but names a coder other than the installed one
+        SIZE_WIDTH_MISMATCH   //!< Header sizes were serialized with a different FwSizeType width than this build's
     };
 
     //! Engine state
@@ -56,26 +57,27 @@ class DeltaCodec final {
         FAILED
     };
 
-    //! SPatch v1 constants
-    static constexpr FwSizeType HEADER_SIZE = 32;
-    static constexpr FwSizeType CHUNK_HEADER_SIZE = 8;
-    static constexpr U8 VERSION = 1;
+    //! SPatch v2 constants. Integers are F Prime serialized (big-endian); sizes are FwSizeType, whose width is recorded
+    //! in the header so a ground/flight disagreement is detected rather than misparsed
+    static constexpr U8 VERSION = 2;
+    static constexpr FwSizeType SIZE_FIELD_WIDTH = sizeof(FwSizeType);
+    static_assert(SIZE_FIELD_WIDTH == 4 || SIZE_FIELD_WIDTH == 8, "SPatch supports 32- and 64-bit FwSizeType");
     // Header field offsets
     static constexpr FwSizeType HDR_VERSION = 4;
     static constexpr FwSizeType HDR_CODER = 5;
     static constexpr FwSizeType HDR_FLAGS = 6;
-    static constexpr FwSizeType HDR_RESERVED = 7;
+    static constexpr FwSizeType HDR_SIZE_WIDTH = 7;
     static constexpr FwSizeType HDR_OLD_SIZE = 8;
-    static constexpr FwSizeType HDR_OLD_CRC = 12;
-    static constexpr FwSizeType HDR_NEW_SIZE = 16;
-    static constexpr FwSizeType HDR_NEW_CRC = 20;
-    static constexpr FwSizeType HDR_CHUNK_BYTES = 24;
-    static constexpr FwSizeType HDR_CRC = 28;  //!< CRC32 of header[0:HDR_CRC]
-    static_assert(HDR_CRC + sizeof(U32) == HEADER_SIZE, "SPatch header layout");
+    static constexpr FwSizeType HDR_OLD_CRC = HDR_OLD_SIZE + SIZE_FIELD_WIDTH;
+    static constexpr FwSizeType HDR_NEW_SIZE = HDR_OLD_CRC + sizeof(U32);
+    static constexpr FwSizeType HDR_NEW_CRC = HDR_NEW_SIZE + SIZE_FIELD_WIDTH;
+    static constexpr FwSizeType HDR_CHUNK_BYTES = HDR_NEW_CRC + sizeof(U32);
+    static constexpr FwSizeType HDR_CRC = HDR_CHUNK_BYTES + SIZE_FIELD_WIDTH;  //!< CRC32 of header[0:HDR_CRC]
+    static constexpr FwSizeType HEADER_SIZE = HDR_CRC + sizeof(U32);           //!< 32 B (32-bit sizes) or 44 B (64-bit)
     // Chunk header field offsets
     static constexpr FwSizeType CHUNK_HDR_CODED_LENGTH = 0;
-    static constexpr FwSizeType CHUNK_HDR_CRC = 4;  //!< CRC32 of the chunk's decoded output
-    static_assert(CHUNK_HDR_CRC + sizeof(U32) == CHUNK_HEADER_SIZE, "SPatch chunk header layout");
+    static constexpr FwSizeType CHUNK_HDR_CRC = CHUNK_HDR_CODED_LENGTH + SIZE_FIELD_WIDTH;  //!< CRC32 of decoded output
+    static constexpr FwSizeType CHUNK_HEADER_SIZE = CHUNK_HDR_CRC + sizeof(U32);
 
     //! Construct an engine using the supplied coder
     explicit DeltaCodec(DeltaCoder& coder);
@@ -100,14 +102,14 @@ class DeltaCodec final {
 
     State state() const { return this->m_state; }
     Status lastStatus() const { return this->m_lastStatus; }
-    U32 chunkIndex() const { return this->m_chunkIndex; }
-    U32 chunkCount() const { return this->m_chunkCount; }
-    U32 resumedChunks() const { return this->m_resumedChunks; }
+    FwSizeType chunkIndex() const { return this->m_chunkIndex; }
+    FwSizeType chunkCount() const { return this->m_chunkCount; }
+    FwSizeType resumedChunks() const { return this->m_resumedChunks; }
     FwSizeType bytesWritten() const;
-    U32 oldSize() const { return this->m_oldSize; }
+    FwSizeType oldSize() const { return this->m_oldSize; }
     U32 oldCrc() const { return this->m_oldCrc; }
     U32 actualOldCrc() const { return this->m_verifyCrc; }
-    U32 newSize() const { return this->m_newSize; }
+    FwSizeType newSize() const { return this->m_newSize; }
     U32 newCrc() const { return this->m_newCrc; }
 
   private:
@@ -140,7 +142,7 @@ class DeltaCodec final {
     Status patchChunk();
     Status finish();
     Status verifyFinalStep();
-    Status fillRing(Chunk& chunk);
+    Status fillWindow(Chunk& chunk);
     Status parseOp(Chunk& chunk);
     Status executeOp(Chunk& chunk);
     Status flushOutput(Chunk& chunk);
@@ -150,28 +152,27 @@ class DeltaCodec final {
     static U32 crcInit();
     static U32 crcUpdate(U32 crc, const U8* data, FwSizeType length);
     static U32 crcFinal(U32 crc);
-    static U32 readU32(const U8* data);
 
     DeltaCoder* m_coder;
     DeltaMedia* m_old;
     DeltaMedia* m_patch;
     DeltaMedia* m_new;
     U8 m_patchBuffer[DELTA_PATCH_BUFFER_SIZE];
-    U8 m_ringBuffer[DELTA_RING_SIZE];
+    U8 m_windowBuffer[DELTA_WINDOW_SIZE];
     U8 m_outBuffer[DELTA_OUTPUT_BUFFER_SIZE];
-    DeltaRing m_ring;
+    DeltaWindow m_window;
 
     State m_state;
     Status m_lastStatus;
-    U32 m_oldSize;
+    FwSizeType m_oldSize;
     U32 m_oldCrc;
-    U32 m_newSize;
+    FwSizeType m_newSize;
     U32 m_newCrc;
-    U32 m_chunkCount;
-    U32 m_chunkBytes;
-    U32 m_chunkIndex;
-    U32 m_resumedChunks;
-    U32 m_verifyChunks;  //!< Chunks of existing output to verify on resume
+    FwSizeType m_chunkCount;
+    FwSizeType m_chunkBytes;
+    FwSizeType m_chunkIndex;
+    FwSizeType m_resumedChunks;
+    FwSizeType m_verifyChunks;  //!< Chunks of existing output to verify on resume
     FwSizeType m_patchSize;
     FwSizeType m_patchPos;  //!< Media offset of the next chunk header
     FwSizeType m_verifyOffset;

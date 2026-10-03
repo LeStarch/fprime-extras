@@ -69,9 +69,12 @@ std::string DeltaPatcherTester ::readFile(const std::string &path) {
                      std::istreambuf_iterator<char>());
 }
 
-U32 DeltaPatcherTester ::readLe32(const U8 *data) {
-  return static_cast<U32>(data[0]) | (static_cast<U32>(data[1]) << 8) |
-         (static_cast<U32>(data[2]) << 16) | (static_cast<U32>(data[3]) << 24);
+FwSizeType DeltaPatcherTester ::readSize(const U8 *data) {
+  FwSizeType value = 0;
+  for (FwSizeType i = 0; i < DeltaCodec::SIZE_FIELD_WIDTH; i++) {
+    value = static_cast<FwSizeType>((value << 8) | data[i]);
+  }
+  return value;
 }
 
 void DeltaPatcherTester ::apply(U32 cmdSeq) {
@@ -213,9 +216,9 @@ void DeltaPatcherTester ::chunkFailed() {
   std::vector<U8> patch(PATCH_LZSS, PATCH_LZSS + PATCH_LZSS_SIZE);
   FwSizeType pos = DeltaCodec::HEADER_SIZE;
   for (U32 i = 0; i < target; i++) {
-    pos += DeltaCodec::CHUNK_HEADER_SIZE + readLe32(&patch[pos]);
+    pos += DeltaCodec::CHUNK_HEADER_SIZE + readSize(&patch[pos]);
   }
-  const U32 codedLength = readLe32(&patch[pos]);
+  const FwSizeType codedLength = readSize(&patch[pos]);
   ASSERT_GT(codedLength, 2u);
   patch[pos + DeltaCodec::CHUNK_HEADER_SIZE + (codedLength / 2)] ^= 0xFF;
   writeFile(this->m_patch, patch.data(), patch.size());
