@@ -34,7 +34,7 @@ void StubWorker ::prepareImage_handler(FwIndexType portNum) {
     FW_ASSERT(0);  // Not implemented
 }
 
-void StubWorker ::updateImage_handler(FwIndexType portNum, const Fw::StringBase& file) {
+void StubWorker ::updateImage_handler(FwIndexType portNum, const Fw::StringBase& file, U32 crc32) {
     FW_ASSERT(0);  // Not implemented
 }
 

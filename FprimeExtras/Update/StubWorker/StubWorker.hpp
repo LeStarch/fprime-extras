@@ -50,8 +50,9 @@ class StubWorker final : public StubWorkerComponentBase {
     //! Handler implementation for updateImage
     //!
     //! Update from a file
-    void updateImage_handler(FwIndexType portNum,        //!< The port number
-                             const Fw::StringBase& file  //!< File to supplied to action
+    void updateImage_handler(FwIndexType portNum,         //!< The port number
+                             const Fw::StringBase& file,  //!< File to supplied to action
+                             U32 crc32                    //!< Expected CRC32 of the file
                              ) override;
 };
 
