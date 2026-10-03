@@ -24,13 +24,18 @@ register_fprime_library(
 )
 
 ### Unit Tests ###
-# register_fprime_ut(
-#     AUTOCODER_INPUTS
-#         "${CMAKE_CURRENT_LIST_DIR}/Updater.fpp"
-#     SOURCES
-#         "${CMAKE_CURRENT_LIST_DIR}/test/ut/UpdaterTestMain.cpp"
-#         "${CMAKE_CURRENT_LIST_DIR}/test/ut/UpdaterTester.cpp"
-#     DEPENDS
-#         STest # For rules-based testing
-#     UT_AUTO_HELPERS
-# )
+register_fprime_ut(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/Updater.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/UpdaterTestMain.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/UpdaterTester.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/TestState/TestState.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/ConfigureNextBoot.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/ConfirmUpdate.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/PrepareUpdate.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/UpdateImage.cpp"
+    DEPENDS
+        STest # For rules-based testing
+    UT_AUTO_HELPERS
+)
