@@ -91,6 +91,39 @@ TEST(Updater, BusyDuringUpdate) {
     confirm.apply(tester);
 }
 
+// Done calls that do not match the outstanding operation are ignored
+TEST(Updater, UnexpectedDoneIgnored) {
+    COMMENT("Idle, wrong-type, and duplicate done calls are ignored without a command response");
+    UpdaterTester tester;
+    UpdaterTester::PrepareUpdate__UnexpectedDone prepareUnexpected;
+    UpdaterTester::UpdateImage__UnexpectedDone updateUnexpected;
+    UpdaterTester::UpdateImage__Start update;
+    UpdaterTester::UpdateImage__DoneOk updateDone;
+    UpdaterTester::UpdateImage__Busy updateBusy;
+    UpdaterTester::ConfirmUpdate__Ok confirm;
+    prepareUnexpected.apply(tester);
+    updateUnexpected.apply(tester);
+    update.apply(tester);
+    prepareUnexpected.apply(tester);
+    updateBusy.apply(tester);
+    updateDone.apply(tester);
+    updateUnexpected.apply(tester);
+    confirm.apply(tester);
+}
+
+// The busy flag is released before the long-running command response is sent
+TEST(Updater, BusyReleasedBeforePrepareResponse) {
+    COMMENT("A command sent on receipt of the PREPARE_UPDATE response is accepted");
+    UpdaterTester tester;
+    tester.testBusyReleasedBeforeResponse(false);
+}
+
+TEST(Updater, BusyReleasedBeforeUpdateResponse) {
+    COMMENT("A command sent on receipt of the UPDATE_IMAGE_FROM response is accepted");
+    UpdaterTester tester;
+    tester.testBusyReleasedBeforeResponse(true);
+}
+
 // Randomized test: apply rules in a random sequence for a large number of iterations
 TEST(Updater, RandomizedTesting) {
     COMMENT("Apply all rules in a random order, checking the shadow model at every step");
@@ -106,15 +139,17 @@ TEST(Updater, RandomizedTesting) {
     UpdaterTester::PrepareUpdate__Busy prepareBusy;
     UpdaterTester::PrepareUpdate__DoneOk prepareDoneOk;
     UpdaterTester::PrepareUpdate__DoneFailed prepareDoneFailed;
+    UpdaterTester::PrepareUpdate__UnexpectedDone prepareUnexpected;
     UpdaterTester::UpdateImage__Start updateStart;
     UpdaterTester::UpdateImage__Busy updateBusy;
     UpdaterTester::UpdateImage__DoneOk updateDoneOk;
     UpdaterTester::UpdateImage__DoneFailed updateDoneFailed;
+    UpdaterTester::UpdateImage__UnexpectedDone updateUnexpected;
 
     STest::Rule<UpdaterTester>* rules[] = {
-        &configureOk, &configureFailed, &configureBusy, &confirmOk,        &confirmFailed,
-        &confirmBusy, &prepareStart,    &prepareBusy,   &prepareDoneOk,    &prepareDoneFailed,
-        &updateStart, &updateBusy,      &updateDoneOk,  &updateDoneFailed,
+        &configureOk,  &configureFailed, &configureBusy,    &confirmOk,         &confirmFailed,     &confirmBusy,
+        &prepareStart, &prepareBusy,     &prepareDoneOk,    &prepareDoneFailed, &prepareUnexpected, &updateStart,
+        &updateBusy,   &updateDoneOk,    &updateDoneFailed, &updateUnexpected,
     };
 
     STest::RandomScenario<UpdaterTester> random("Random Rules", rules, FW_NUM_ARRAY_ELEMENTS(rules));

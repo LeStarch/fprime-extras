@@ -65,6 +65,12 @@ module Update {
         
         event UpdateFailed(status: UpdateStatus) severity warning high format "Update failed: {}"
 
+        @ A prepareImageDone call arrived when no PREPARE_UPDATE was outstanding and was ignored
+        event UnexpectedPrepareDone(status: UpdateStatus) severity warning low format "Ignored unexpected prepare completion: {}"
+
+        @ An updateImageDone call arrived when no UPDATE_IMAGE_FROM was outstanding and was ignored
+        event UnexpectedUpdateDone(status: UpdateStatus) severity warning low format "Ignored unexpected update completion: {}"
+
         ###############################################################################
         # Standard AC Ports: Required for Channels, Events, Commands, and Parameters  #
         ###############################################################################

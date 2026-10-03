@@ -14,7 +14,7 @@ namespace Update {
 // ----------------------------------------------------------------------
 
 Updater ::Updater(const char* const compName)
-    : UpdaterComponentBase(compName), m_opCode(0), m_cmdSeq(0), m_busy(false) {}
+    : UpdaterComponentBase(compName), m_opCode(0), m_cmdSeq(0), m_busy(false), m_pending(PendingOperation::NONE) {}
 
 Updater ::~Updater() {}
 
@@ -23,25 +23,31 @@ Updater ::~Updater() {}
 // ----------------------------------------------------------------------
 
 void Updater ::prepareImageDone_handler(FwIndexType portNum, const Update::UpdateStatus& status) {
+    if (!this->claimPending(PendingOperation::PREPARE)) {
+        this->log_WARNING_LO_UnexpectedPrepareDone(status);
+        return;
+    }
     if (status != Update::UpdateStatus::OP_OK) {
         this->log_WARNING_HI_PrepareUpdateFailed(status);
-        this->cmdResponse_out(this->m_opCode, this->m_cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+        this->finishPending(Fw::CmdResponse::EXECUTION_ERROR);
     } else {
         this->log_ACTIVITY_HI_PrepareUpdateSucceeded();
-        this->cmdResponse_out(this->m_opCode, this->m_cmdSeq, Fw::CmdResponse::OK);
+        this->finishPending(Fw::CmdResponse::OK);
     }
-    this->m_busy = false;
 }
 
 void Updater ::updateImageDone_handler(FwIndexType portNum, const Update::UpdateStatus& status) {
+    if (!this->claimPending(PendingOperation::UPDATE)) {
+        this->log_WARNING_LO_UnexpectedUpdateDone(status);
+        return;
+    }
     if (status != Update::UpdateStatus::OP_OK) {
         this->log_WARNING_HI_UpdateFailed(status);
-        this->cmdResponse_out(this->m_opCode, this->m_cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
+        this->finishPending(Fw::CmdResponse::EXECUTION_ERROR);
     } else {
         this->log_ACTIVITY_HI_UpdateSucceeded();
-        this->cmdResponse_out(this->m_opCode, this->m_cmdSeq, Fw::CmdResponse::OK);
+        this->finishPending(Fw::CmdResponse::OK);
     }
-    this->m_busy = false;
 }
 
 // ----------------------------------------------------------------------
@@ -77,10 +83,11 @@ void Updater ::PREPARE_UPDATE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
     if (!already_busy) {
         this->m_opCode = opCode;
         this->m_cmdSeq = cmdSeq;
-        this->m_busy = true;
+        this->m_pending = PendingOperation::PREPARE;
         this->log_ACTIVITY_HI_PrepareUpdate();
         this->prepareImage_out(0);
     } else {
+        this->log_WARNING_HI_PrepareUpdateFailed(Update::UpdateStatus::BUSY);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
     }
 }
@@ -93,10 +100,11 @@ void Updater ::UPDATE_IMAGE_FROM_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, con
     if (!already_busy) {
         this->m_opCode = opCode;
         this->m_cmdSeq = cmdSeq;
-        this->m_busy = true;
+        this->m_pending = PendingOperation::UPDATE;
         this->log_ACTIVITY_HI_Update(file);
         this->updateImage_out(0, file, crc32);
     } else {
+        this->log_WARNING_HI_UpdateFailed(Update::UpdateStatus::BUSY);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
     }
 }
@@ -120,6 +128,24 @@ void Updater ::CONFIRM_UPDATE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
         this->log_WARNING_HI_ConfirmBootFailed(Update::UpdateStatus::BUSY);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
     }
+}
+
+// ----------------------------------------------------------------------
+// Helper functions
+// ----------------------------------------------------------------------
+
+bool Updater ::claimPending(PendingOperation operation) {
+    // Strong exchange: a spurious failure would drop a legitimate completion
+    PendingOperation expected = operation;
+    return this->m_pending.compare_exchange_strong(expected, PendingOperation::NONE);
+}
+
+void Updater ::finishPending(Fw::CmdResponse response) {
+    const FwOpcodeType opCode = this->m_opCode;
+    const U32 cmdSeq = this->m_cmdSeq;
+    // Release busy before responding so a command sent in reaction to the response is not rejected
+    this->m_busy = false;
+    this->cmdResponse_out(opCode, cmdSeq, response);
 }
 
 }  // namespace Update

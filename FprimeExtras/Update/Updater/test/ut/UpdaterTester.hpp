@@ -50,6 +50,9 @@ class UpdaterTester final : public UpdaterGTestBase {
 
     Update::UpdateStatus from_confirmImage_handler(FwIndexType portNum) override;
 
+    //! Record command responses; optionally send a probe command from within the response callback
+    void cmdResponseIn(FwOpcodeType opCode, U32 cmdSeq, Fw::CmdResponse response) override;
+
   private:
     // ----------------------------------------------------------------------
     // Helper functions
@@ -64,7 +67,7 @@ class UpdaterTester final : public UpdaterGTestBase {
     //! Dispatch one queued message on the component and assert success
     void dispatch();
 
-    //! Assert a command was rejected as BUSY without reaching the worker or emitting events
+    //! Assert a command was rejected as BUSY without reaching the worker
     void assertRejectedBusy(FwOpcodeType opCode, U32 cmdSeq);
 
     //! Assert the outstanding long-running command completed with the given response
@@ -72,8 +75,19 @@ class UpdaterTester final : public UpdaterGTestBase {
 
   public:
     // ----------------------------------------------------------------------
+    // Directed tests
+    // ----------------------------------------------------------------------
+
+    //! Assert a command sent while the done response is being delivered is not rejected BUSY
+    void testBusyReleasedBeforeResponse(bool update);
+
+  public:
+    // ----------------------------------------------------------------------
     // Member variables
     // ----------------------------------------------------------------------
+
+    //! Send a CONFIRM_UPDATE probe from the next command response callback
+    bool probeOnResponse = false;
 
     //! The component under test
     Updater component;
@@ -101,12 +115,14 @@ class UpdaterTester final : public UpdaterGTestBase {
     FW_RBT_DEFINE_RULE(UpdaterTester, PrepareUpdate, Busy);
     FW_RBT_DEFINE_RULE(UpdaterTester, PrepareUpdate, DoneOk);
     FW_RBT_DEFINE_RULE(UpdaterTester, PrepareUpdate, DoneFailed);
+    FW_RBT_DEFINE_RULE(UpdaterTester, PrepareUpdate, UnexpectedDone);
 
     //! Rules for the UPDATE_IMAGE_FROM command and updateImageDone port
     FW_RBT_DEFINE_RULE(UpdaterTester, UpdateImage, Start);
     FW_RBT_DEFINE_RULE(UpdaterTester, UpdateImage, Busy);
     FW_RBT_DEFINE_RULE(UpdaterTester, UpdateImage, DoneOk);
     FW_RBT_DEFINE_RULE(UpdaterTester, UpdateImage, DoneFailed);
+    FW_RBT_DEFINE_RULE(UpdaterTester, UpdateImage, UnexpectedDone);
 };
 
 }  // namespace Update

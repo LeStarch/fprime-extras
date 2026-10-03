@@ -49,7 +49,9 @@ void UpdaterTester::PrepareUpdate__Busy__action() {
     this->dispatch();
 
     this->assertRejectedBusy(UpdaterComponentBase::OPCODE_PREPARE_UPDATE, cmdSeq);
-    ASSERT_EVENTS_SIZE(0);
+    ASSERT_EVENTS_SIZE(1);
+    ASSERT_EVENTS_PrepareUpdateFailed_SIZE(1);
+    ASSERT_EVENTS_PrepareUpdateFailed(0, Update::UpdateStatus::BUSY);
 }
 
 // ----------------------------------------------------------------------
@@ -90,6 +92,28 @@ void UpdaterTester::PrepareUpdate__DoneFailed__action() {
     ASSERT_EVENTS_PrepareUpdateFailed_SIZE(1);
     ASSERT_EVENTS_PrepareUpdateFailed(0, failure);
     this->shadow.shadow_finish();
+}
+
+// ----------------------------------------------------------------------
+// PrepareUpdate.UnexpectedDone
+// ----------------------------------------------------------------------
+
+bool UpdaterTester::PrepareUpdate__UnexpectedDone__precondition() const {
+    return this->shadow.shadow_pending != UpdaterTestState::Pending::PREPARE;
+}
+
+void UpdaterTester::PrepareUpdate__UnexpectedDone__action() {
+    this->clearHistory();
+    const Update::UpdateStatus status =
+        static_cast<Update::UpdateStatus::T>(STest::Pick::lowerUpper(0, Update::UpdateStatus::NUM_CONSTANTS - 1));
+
+    this->invoke_to_prepareImageDone(0, status);
+
+    ASSERT_FROM_PORT_HISTORY_SIZE(0);
+    ASSERT_CMD_RESPONSE_SIZE(0);
+    ASSERT_EVENTS_SIZE(1);
+    ASSERT_EVENTS_UnexpectedPrepareDone_SIZE(1);
+    ASSERT_EVENTS_UnexpectedPrepareDone(0, status);
 }
 
 }  // namespace Update
