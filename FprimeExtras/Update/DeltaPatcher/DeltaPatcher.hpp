@@ -93,6 +93,11 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Close all media
     void closeMedia();
 
+    //! True when the three paths resolve (textually, via Os::FilePathUtils) to three different files
+    static bool distinctPaths(const Fw::CmdStringArg& first,
+                              const Fw::CmdStringArg& second,
+                              const Fw::CmdStringArg& third);
+
     //! Map an engine status onto the reported status enumeration
     static DeltaPatchStatus toStatus(DeltaCodec::Status status);
 

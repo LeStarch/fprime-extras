@@ -425,12 +425,113 @@ static void putBe(U8 *dest, U64 value, FwSizeType width) {
 
 // Rewrite a size (FwSizeType) header field and recompute the header CRC so only
 // the geometry check can fail
+// CRC32 (IEEE 802.3, init 0xFFFFFFFF, final inversion) as written into SPatch
+static U32 crc32(const U8 *data, FwSizeType length) {
+  return ~Utils::crc32_ieee802_3_update(data, length, 0xFFFFFFFFu);
+}
+
 static void setHeaderSize(std::vector<U8> &patch, FwSizeType offset,
                           FwSizeType value) {
   putBe(&patch[offset], value, DeltaCodec::SIZE_FIELD_WIDTH);
-  U32 crc = 0;
-  Utils::crc32_ieee802_3_update(patch.data(), DeltaCodec::HDR_CRC, crc);
-  putBe(&patch[DeltaCodec::HDR_CRC], crc, sizeof(U32));
+  putBe(&patch[DeltaCodec::HDR_CRC], crc32(patch.data(), DeltaCodec::HDR_CRC),
+        sizeof(U32));
+}
+
+// Build a one-chunk v2 patch over an empty old image whose new image is `newSize`
+// bytes of `fill`, carrying `coded` as the chunk payload for `coderId`
+static std::vector<U8> buildSingleChunkPatch(U8 coderId, FwSizeType newSize,
+                                             U8 fill,
+                                             const std::vector<U8> &coded) {
+  const std::vector<U8> newImage(newSize, fill);
+  const U32 newCrc = crc32(newImage.data(), newImage.size());
+  std::vector<U8> patch(DeltaCodec::HEADER_SIZE, 0);
+  patch[0] = 'S';
+  patch[1] = 'P';
+  patch[2] = 'A';
+  patch[3] = 'T';
+  patch[DeltaCodec::HDR_VERSION] = DeltaCodec::VERSION;
+  patch[DeltaCodec::HDR_CODER] = coderId;
+  patch[DeltaCodec::HDR_FLAGS] = 0;
+  patch[DeltaCodec::HDR_SIZE_WIDTH] = DeltaCodec::SIZE_FIELD_WIDTH;
+  putBe(&patch[DeltaCodec::HDR_OLD_SIZE], 0, DeltaCodec::SIZE_FIELD_WIDTH);
+  putBe(&patch[DeltaCodec::HDR_OLD_CRC], 0, sizeof(U32)); // CRC32 of no bytes
+  putBe(&patch[DeltaCodec::HDR_NEW_SIZE], newSize, DeltaCodec::SIZE_FIELD_WIDTH);
+  putBe(&patch[DeltaCodec::HDR_NEW_CRC], newCrc, sizeof(U32));
+  putBe(&patch[DeltaCodec::HDR_CHUNK_BYTES], DELTA_WINDOW_SIZE,
+        DeltaCodec::SIZE_FIELD_WIDTH);
+  putBe(&patch[DeltaCodec::HDR_CRC], crc32(patch.data(), DeltaCodec::HDR_CRC),
+        sizeof(U32));
+  std::vector<U8> chunkHeader(DeltaCodec::CHUNK_HEADER_SIZE, 0);
+  putBe(&chunkHeader[DeltaCodec::CHUNK_HDR_CODED_LENGTH], coded.size(),
+        DeltaCodec::SIZE_FIELD_WIDTH);
+  putBe(&chunkHeader[DeltaCodec::CHUNK_HDR_CRC], newCrc, sizeof(U32));
+  patch.insert(patch.end(), chunkHeader.begin(), chunkHeader.end());
+  patch.insert(patch.end(), coded.begin(), coded.end());
+  return patch;
+}
+
+TEST(DeltaCodec, RejectsPendingCoderState) {
+  // The decoded op stream is byte-exact in every case (so the chunk CRC passes),
+  // but the coder is left mid-token or holding undelivered output
+  struct Case {
+    const char *name;
+    U8 coderId;
+    FwSizeType newSize;
+    std::vector<U8> coded;
+  };
+  // A 256-byte op stream (LIT, uvar 253, 253 literals) fills the window exactly
+  const std::vector<Case> cases = {
+      {"RLE surplus repeat byte at full window", DeltaCoder::ID_RLE, 253,
+       {0x02, 0x02, 0xFD, 0x01, 0xFF, 0x6C, 0xFB, 0x6C}},
+      {"LZSS surplus match byte at full window", DeltaCoder::ID_LZSS, 253,
+       {0x08, 0x02, 0xFD, 0x01, 0x6C, 0x00, 0xFA}},
+      {"RLE incomplete literal run at full window", DeltaCoder::ID_RLE, 253,
+       {0x02, 0x02, 0xFD, 0x01, 0xFF, 0x6C, 0xFA, 0x6C, 0x05}},
+      {"RLE incomplete repeat at full window", DeltaCoder::ID_RLE, 253,
+       {0x02, 0x02, 0xFD, 0x01, 0xFF, 0x6C, 0xFA, 0x6C, 0x83}},
+      {"LZSS incomplete match at full window", DeltaCoder::ID_LZSS, 253,
+       {0x0C, 0x02, 0xFD, 0x01, 0x6C, 0x00, 0xF9, 0x00}},
+      {"RLE incomplete literal run, short chunk", DeltaCoder::ID_RLE, 22,
+       {0x01, 0x02, 0x16, 0x94, 0x6C, 0x05}},
+      {"RLE incomplete repeat, short chunk", DeltaCoder::ID_RLE, 22,
+       {0x01, 0x02, 0x16, 0x94, 0x6C, 0x83}},
+      {"LZSS incomplete match, short chunk", DeltaCoder::ID_LZSS, 22,
+       {0x18, 0x02, 0x16, 0x6C, 0x00, 0x12, 0x00}},
+  };
+  DeltaCoderRle rle;
+  DeltaCoderLzss lzss;
+  const std::vector<U8> oldImage;
+  for (const Case &c : cases) {
+    DeltaCoder &coder =
+        (c.coderId == DeltaCoder::ID_RLE) ? static_cast<DeltaCoder &>(rle)
+                                          : static_cast<DeltaCoder &>(lzss);
+    const std::vector<U8> patch =
+        buildSingleChunkPatch(c.coderId, c.newSize, 0x6C, c.coded);
+    DeltaCodec::State state;
+    EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_OPCODE)
+        << c.name;
+    EXPECT_EQ(state, DeltaCodec::FAILED) << c.name;
+  }
+  // Controls: the same streams closed at a token boundary are accepted
+  const std::vector<Case> valid = {
+      {"RLE complete", DeltaCoder::ID_RLE, 253,
+       {0x02, 0x02, 0xFD, 0x01, 0xFF, 0x6C, 0xFA, 0x6C}},
+      {"LZSS complete with unused flag bits", DeltaCoder::ID_LZSS, 253,
+       {0x08, 0x02, 0xFD, 0x01, 0x6C, 0x00, 0xF9}},
+      {"RLE complete, short chunk", DeltaCoder::ID_RLE, 22,
+       {0x01, 0x02, 0x16, 0x94, 0x6C}},
+  };
+  for (const Case &c : valid) {
+    DeltaCoder &coder =
+        (c.coderId == DeltaCoder::ID_RLE) ? static_cast<DeltaCoder &>(rle)
+                                          : static_cast<DeltaCoder &>(lzss);
+    const std::vector<U8> patch =
+        buildSingleChunkPatch(c.coderId, c.newSize, 0x6C, c.coded);
+    DeltaCodec::State state;
+    EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::OP_OK)
+        << c.name;
+    EXPECT_EQ(state, DeltaCodec::COMPLETE) << c.name;
+  }
 }
 
 TEST(DeltaCodec, RejectsSizeWidthMismatch) {

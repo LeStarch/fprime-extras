@@ -67,6 +67,13 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   project-supplied decompressor. The coder id in the SPatch header must match the installed coder; an otherwise
   valid header naming a different coder is rejected with `CODER_MISMATCH` (distinct from `BAD_HEADER`, which
   indicates corruption or an out-of-range geometry).
+  A coder implements `id()`, `reset()`, `decode()` and `pending()`; after a chunk's coded bytes are exhausted the
+  engine requires `pending()` to be false (no unfinished token, no undelivered output) or the chunk fails
+  `BAD_OPCODE` even when the delivered bytes matched the chunk CRC.
+* **Path aliasing.** `old_file`, `patch_file` and `new_file` are resolved textually (`Os::FilePathUtils::resolveFromCwd`:
+  `.`/`..`/duplicate separators, CWD for relative paths) and must name three distinct paths or the command is rejected
+  `SAME_FILE` before any file is opened. Symbolic and hard links are not detected (`Os::File` exposes no file
+  identity); operators must not alias update files through links.
 
 ### SPatch v2 container
 

@@ -48,6 +48,13 @@ class DeltaCoder {
     //! Consumes bytes from `in` (setting `consumed`) and pushes decoded bytes into `window` until input is exhausted or
     //! the window has no space. Must make progress whenever both input and space are available.
     virtual Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) = 0;
+
+    //! \brief True while the coder holds an unfinished token or undelivered output
+    //!
+    //! Queried by DeltaCodec once a chunk's coded bytes are exhausted: a valid stream ends at a token boundary with
+    //! every decoded byte already pushed into the window. Legal trailing padding (such as unused LZSS flag bits) must
+    //! not count as pending.
+    virtual bool pending() const = 0;
 };
 
 //! \brief Pass-through coder (id 0)
@@ -56,6 +63,7 @@ class DeltaCoderNone final : public DeltaCoder {
     U8 id() const override { return ID_NONE; }
     void reset() override {}
     Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
+    bool pending() const override { return false; }
 };
 
 //! \brief Byte run-length coder (id 1)
@@ -68,6 +76,7 @@ class DeltaCoderRle final : public DeltaCoder {
     U8 id() const override { return ID_RLE; }
     void reset() override;
     Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
+    bool pending() const override { return this->m_mode != CONTROL; }
 
   private:
     enum Mode : U8 { CONTROL, LITERAL, REPEAT_VALUE, REPEAT };
@@ -90,6 +99,7 @@ class DeltaCoderLzss final : public DeltaCoder {
     U8 id() const override { return ID_LZSS; }
     void reset() override;
     Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
+    bool pending() const override { return (this->m_mode == MATCH_LENGTH) || (this->m_mode == MATCH_COPY); }
 
   private:
     enum Mode : U8 { FLAGS, ITEM, MATCH_LENGTH, MATCH_COPY };

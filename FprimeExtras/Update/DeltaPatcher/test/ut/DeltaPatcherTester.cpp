@@ -351,6 +351,24 @@ void DeltaPatcherTester ::queueOverflow() {
   ASSERT_CMD_RESPONSE_SIZE(2 + DeltaPatcher::MAX_DISPATCH_PER_TICK);
 }
 
+void DeltaPatcherTester ::sameFileAliased() {
+  const std::string alias = this->m_dir + "/./../" +
+                            this->m_dir.substr(this->m_dir.rfind('/') + 1) +
+                            "//old.bin";
+  this->sendCmd_APPLY_PATCH(0, 1, Fw::CmdStringArg(this->m_old.c_str()),
+                            Fw::CmdStringArg(this->m_patch.c_str()),
+                            Fw::CmdStringArg(alias.c_str()));
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::SAME_FILE);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::VALIDATION_ERROR);
+  ASSERT_EVENTS_PatchStarted_SIZE(0);
+  const std::string old = readFile(this->m_old);
+  ASSERT_EQ(old.size(), OLD_IMAGE_SIZE);
+  ASSERT_EQ(0, memcmp(old.data(), OLD_IMAGE, OLD_IMAGE_SIZE));
+}
+
 void DeltaPatcherTester ::sameFile() {
   // new_file aliasing old_file would destroy the only copy of the old image:
   // rejected before any open

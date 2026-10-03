@@ -85,6 +85,9 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! APPLY_PATCH with new_file == old_file is rejected with SAME_FILE before any file is opened
     void sameFile();
 
+    //! new_file naming the old image through a different spelling (`dir/./old.bin`) is rejected SAME_FILE
+    void sameFileAliased();
+
   private:
     // ----------------------------------------------------------------------
     // Helper functions

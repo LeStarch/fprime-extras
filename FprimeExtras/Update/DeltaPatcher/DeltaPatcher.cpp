@@ -7,6 +7,9 @@
 
 #include "FprimeExtras/Update/DeltaPatcher/DeltaPatcher.hpp"
 
+#include "Fw/Types/FileNameString.hpp"
+#include "Os/FilePathUtils.hpp"
+
 namespace Update {
 
 // ----------------------------------------------------------------------
@@ -51,6 +54,28 @@ void DeltaPatcher ::run_handler(FwIndexType portNum, U32 context) {
 }
 
 // ----------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------
+
+bool DeltaPatcher::distinctPaths(const Fw::CmdStringArg& first,
+                                 const Fw::CmdStringArg& second,
+                                 const Fw::CmdStringArg& third) {
+    const Fw::CmdStringArg* const paths[] = {&first, &second, &third};
+    Fw::FileNameString resolved[3];
+    for (FwSizeType i = 0; i < 3; i++) {
+        char buffer[Os::FilePathUtils::MAX_PATH_LENGTH];
+        const Os::FilePathUtils::Status status =
+            Os::FilePathUtils::resolveFromCwd(paths[i]->toChar(), buffer, sizeof(buffer));
+        if (status != Os::FilePathUtils::VALID) {
+            // Unresolvable spellings cannot be proven distinct
+            return false;
+        }
+        resolved[i] = buffer;
+    }
+    return (resolved[0] != resolved[1]) && (resolved[0] != resolved[2]) && (resolved[1] != resolved[2]);
+}
+
+// ----------------------------------------------------------------------
 // Handler implementations for commands
 // ----------------------------------------------------------------------
 
@@ -65,8 +90,9 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
         return;
     }
-    // The old image is never written: refuse aliased paths before any file is opened
-    if ((old_file == new_file) || (patch_file == new_file) || (old_file == patch_file)) {
+    // The old image is never written: refuse aliased paths before any file is opened. Paths are compared after
+    // textual resolution (`.`, `..`, duplicate separators, CWD) so spellings of one file cannot slip past.
+    if (!DeltaPatcher::distinctPaths(old_file, patch_file, new_file)) {
         this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::SAME_FILE);
         this->tlmWrite_LastStatus(DeltaPatchStatus::SAME_FILE);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);

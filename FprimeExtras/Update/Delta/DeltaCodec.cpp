@@ -376,8 +376,9 @@ DeltaCodec::Status DeltaCodec::patchChunk() {
         this->m_runningCrc = this->m_committedCrc;
         return this->fail(status);
     }
-    // Everything declared for this chunk must have been consumed exactly
-    if (chunk.codedRemaining != 0 || chunk.patchPos != chunk.patchFill || this->m_window.count() != 0) {
+    // Everything declared for this chunk must have been consumed exactly, and the coder must end at a token boundary
+    if (chunk.codedRemaining != 0 || chunk.patchPos != chunk.patchFill || this->m_window.count() != 0 ||
+        this->m_coder->pending()) {
         this->m_runningCrc = this->m_committedCrc;
         return this->fail(BAD_OPCODE);
     }
