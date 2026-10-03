@@ -55,8 +55,8 @@ class Updater final : public UpdaterComponentBase {
     //!
     //! Allows the user to set the next boot for the given mode. TEST boots the system exactly one time. PERMANENT
     //! then sets the image as the permanent boot image.
-    void CONFIGURE_NEXT_BOOT_cmdHandler(FwOpcodeType opCode,       //!< The opcode
-                                        U32 cmdSeq,                //!< The command sequence number
+    void CONFIGURE_NEXT_BOOT_cmdHandler(FwOpcodeType opCode,              //!< The opcode
+                                        U32 cmdSeq,                       //!< The command sequence number
                                         const Update::NextBootMode& next  //!< Mode of the next boot
                                         ) override;
 
@@ -87,9 +87,20 @@ class Updater final : public UpdaterComponentBase {
                                    ) override;
 
   private:
+    //! Long-running operation awaiting a done call from the worker
+    enum class PendingOperation : U8 { NONE, PREPARE, UPDATE };
+
+    //! Claim the outstanding operation for a done call. Returns false if `operation` is not outstanding.
+    bool claimPending(PendingOperation operation);
+
+    //! Release the busy flag, then respond to the outstanding command
+    void finishPending(Fw::CmdResponse response);
+
+  private:
     FwOpcodeType m_opCode;
     U32 m_cmdSeq;
     std::atomic<bool> m_busy;
+    std::atomic<PendingOperation> m_pending;
 };
 
 }  // namespace Update
