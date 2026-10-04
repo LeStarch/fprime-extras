@@ -15,8 +15,9 @@ namespace Update {
 
 //! \brief Applies SPatch delta files to on-board images, one bounded step per rate-group tick
 //!
-//! All handlers execute on the caller of `run` (commands are dispatched from the queue there), so no locking is needed
-//! and the engine's fixed buffers are the only patch-time storage. The shipped LZSS coder is used unless a project
+//! All handlers execute on the caller of `run` (commands are dispatched from the queue there); `run` is a guarded
+//! port so an unsupported second driver is serialised by the component mutex rather than interleaving steps. The
+//! engine's fixed buffers are the only patch-time storage. The shipped LZSS coder is used unless a project
 //! supplies its own via `setCoder()` during topology setup, before rate groups start.
 class DeltaPatcher final : public DeltaPatcherComponentBase {
     friend class DeltaPatcherTester;
@@ -93,7 +94,7 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Close all media
     void closeMedia();
 
-    //! True when the three paths resolve (textually, via Os::FilePathUtils) to three different files
+    //! Outcome of checkPaths()
     enum PathCheck {
         PATHS_DISTINCT,  //!< Three distinct, well-formed paths
         PATHS_INVALID,   //!< A path could not be resolved (empty, too long,

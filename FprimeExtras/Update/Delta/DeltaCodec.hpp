@@ -18,9 +18,10 @@ namespace Update {
 //! \brief Allocation-free, bounded-step SPatch v2 engine
 //!
 //! Applies an SPatch (format: FprimeExtras/Update/DeltaPatcher/docs/sdd.md) held in `patch` media to the `oldImage`
-//! media producing the `newImage` media. Work is performed in step() calls, each bounded to one chunk (or
-//! DELTA_VERIFY_BYTES_PER_STEP bytes of CRC verification), so the engine may be driven from a rate group. All storage
-//! is fixed: three buffers sized by DeltaCodecConfig.hpp plus scalar state.
+//! media producing the `newImage` media. Work is performed in step() calls, each bounded to DELTA_MAX_IO_PER_STEP
+//! media reads/writes (a chunk may span steps) or DELTA_VERIFY_BYTES_PER_STEP bytes of CRC verification, so the
+//! engine may be driven from a rate group. All storage is fixed: four buffers sized by DeltaCodecConfig.hpp plus
+//! scalar state.
 //!
 //! Resume: chunks already present in the new image media are CRC-verified and skipped, so an interrupted patch
 //! restarts from the first missing or corrupt chunk with no persisted engine state.
@@ -122,7 +123,7 @@ class DeltaCodec final {
   private:
     enum Op : U8 { OP_COPY = 0, OP_ADD = 1, OP_LIT = 2, OP_SEEK = 3 };
 
-    //! Per-chunk working set; lives on the stack for the duration of one step()
+    //! Per-chunk working set; held in m_chunk across step() calls until the chunk commits or fails
     struct Chunk {
         FwSizeType codedLength;     //!< Coded payload bytes declared by the chunk header
         FwSizeType codedRemaining;  //!< Coded payload bytes not yet read from media

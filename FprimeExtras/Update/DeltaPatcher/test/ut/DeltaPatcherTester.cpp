@@ -49,6 +49,9 @@ DeltaPatcherTester ::~DeltaPatcherTester() {
   (void)std::remove(this->m_old.c_str());
   (void)std::remove(this->m_patch.c_str());
   (void)std::remove(this->m_new.c_str());
+  for (const char* extra : {"/linked.bin", "/fifo", "/old-link.bin", "/good.bin"}) {
+    (void)std::remove((this->m_dir + extra).c_str());
+  }
   (void)rmdir(this->m_dir.c_str());
 }
 
@@ -460,7 +463,23 @@ void DeltaPatcherTester ::badHeaderLeavesNoOutput() {
   writeFile(this->m_new, OLD_IMAGE, 10);
   this->apply(2);
   ASSERT_EVENTS_PatchRejected_SIZE(2);
+  ASSERT_EVENTS_PatchRejected(1, DeltaPatchStatus::BAD_HEADER);
   ASSERT_EQ(readFile(this->m_new).size(), 10u);
+}
+
+void DeltaPatcherTester ::badPath() {
+  this->sendCmd_APPLY_PATCH(0, 1, Fw::CmdStringArg(""),
+                            Fw::CmdStringArg(this->m_patch.c_str()),
+                            Fw::CmdStringArg(this->m_new.c_str()));
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BAD_PATH);
+  ASSERT_TLM_LastStatus(0, DeltaPatchStatus::BAD_PATH);
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::VALIDATION_ERROR);
+  ASSERT_EVENTS_PatchStarted_SIZE(0);
+  ASSERT_EQ(::access(this->m_new.c_str(), F_OK), -1);
 }
 
 void DeltaPatcherTester ::outputReplacedBeforeVerify() {
@@ -478,13 +497,13 @@ void DeltaPatcherTester ::outputReplacedBeforeVerify() {
   ASSERT_EQ(this->component.m_codec.state(), DeltaCodec::PATCHING);
   ASSERT_EQ(this->component.m_codec.chunkIndex(),
             this->component.m_codec.chunkCount());
-  // Replace the output path with a same-sized impostor; the patcher's open
-  // handle still refers to the (now orphaned) correct image, so only a by-name
-  // re-resolution can catch this
-  const std::string impostor = this->m_dir + "/impostor.bin";
-  std::vector<U8> junk(NEW_IMAGE_SIZE, 0x5A);
-  writeFile(impostor, junk.data(), junk.size());
-  ASSERT_EQ(::rename(impostor.c_str(), this->m_new.c_str()), 0);
+  // Replace the output path with a symlink to a byte-exact copy of the correct
+  // image: the patcher's open handle still refers to the (now orphaned) real
+  // output, so only the by-name refresh (lstat, regular files only) rejects it
+  const std::string good = this->m_dir + "/good.bin";
+  writeFile(good, NEW_IMAGE, NEW_IMAGE_SIZE);
+  ASSERT_EQ(::unlink(this->m_new.c_str()), 0);
+  ASSERT_EQ(::symlink(good.c_str(), this->m_new.c_str()), 0);
   ticks += this->runUntilResponse();
   ASSERT_LT(ticks, static_cast<U32>(MAX_TICKS));
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,

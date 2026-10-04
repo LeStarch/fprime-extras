@@ -77,6 +77,11 @@ TEST(OffNominal, SameFileHardLink) {
     tester.sameFileHardLink();
 }
 
+TEST(OffNominal, BadPath) {
+    Update::DeltaPatcherTester tester;
+    tester.badPath();
+}
+
 TEST(OffNominal, SpecialFiles) {
     Update::DeltaPatcherTester tester;
     tester.specialFiles();
