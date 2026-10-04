@@ -165,6 +165,8 @@ def lzss_decode(data: bytes) -> bytes:
     while i < n:
         flags = data[i]
         i += 1
+        if i >= n:
+            raise CoderError("LZSS flag byte without items")  # the flight decoder rejects this as pending
         for bit in range(7, -1, -1):
             if i >= n:
                 break  # trailing unused flag bits

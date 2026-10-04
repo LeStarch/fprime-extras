@@ -31,8 +31,8 @@ Configure component properties and worker component:
 ## Delta patching
 
 The subtopology instantiates `deltaPatcher: Update.DeltaPatcher` (base id `BASE_ID + 0x2000`, queue size
-`QueueSizes.deltaPatcher`). It is a queued component with no thread of its own: the deployment **must** connect a
-rate group to `deltaPatcher.run`, e.g.
+`QueueSizes.deltaPatcher`). It is a queued component with no thread of its own: the deployment **must** connect
+exactly one rate group to `deltaPatcher.run` (a `guarded` port: a second driver is serialised, not supported), e.g.
 
 ```fpp
 rateGroup3.RateGroupMemberOut[N] -> Update.deltaPatcher.run
@@ -43,8 +43,9 @@ rateGroup3.RateGroupMemberOut[N] -> Update.deltaPatcher.run
 wired directly to `worker.updateImage`: the worker has a single client (`updater`), which owns the busy flag and the
 command response delivered through `updateImageDone`. Automatic installation would require a new async input on
 `Updater` that shares the `UPDATE_IMAGE_FROM` busy gate. Connecting `run` is mandatory: without a rate group the
-component accepts commands into its queue but never dispatches them. Each `run` performs blocking `Os::File` I/O
-(up to `DELTA_MAX_CODED_CHUNK_BYTES` bytes of patch read, `DELTA_MAX_CHUNK_BYTES` bytes of output plus the
-corresponding old-image reads, or
-`DELTA_VERIFY_BYTES_PER_STEP` bytes of CRC), so use a slow, non-critical rate group. See
+component accepts commands into its queue but never dispatches them (and `Svc::CmdDispatcher` accumulates
+unanswered entries). Each `run` performs `Os::File` I/O on the rate-group thread, bounded to
+`DELTA_MAX_IO_PER_STEP` media calls (a chunk needing more carries over to the next tick) and at most
+`DELTA_VERIFY_BYTES_PER_STEP` bytes of CRC, so use a slow, non-critical rate group. `APPLY_PATCH` paths are limited
+to `FW_CMD_STRING_MAX_SIZE` (F Prime default 40) characters. See
 `FprimeExtras/Update/DeltaPatcher/docs/sdd.md`.

@@ -72,6 +72,26 @@ TEST(OffNominal, SameFile) {
     tester.sameFile();
 }
 
+TEST(OffNominal, SameFileHardLink) {
+    Update::DeltaPatcherTester tester;
+    tester.sameFileHardLink();
+}
+
+TEST(OffNominal, SpecialFiles) {
+    Update::DeltaPatcherTester tester;
+    tester.specialFiles();
+}
+
+TEST(OffNominal, BadHeaderLeavesNoOutput) {
+    Update::DeltaPatcherTester tester;
+    tester.badHeaderLeavesNoOutput();
+}
+
+TEST(OffNominal, OutputReplacedBeforeVerify) {
+    Update::DeltaPatcherTester tester;
+    tester.outputReplacedBeforeVerify();
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

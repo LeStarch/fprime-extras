@@ -88,6 +88,18 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! new_file naming the old image through a different spelling (`dir/./old.bin`) is rejected SAME_FILE
     void sameFileAliased();
 
+    //! new_file that is a hard link to old_file is rejected SAME_FILE (device/inode identity)
+    void sameFileHardLink();
+
+    //! FIFOs, directories and symbolic links are rejected OPEN_FAILED without blocking the caller
+    void specialFiles();
+
+    //! A rejected header does not leave an empty new_file behind
+    void badHeaderLeavesNoOutput();
+
+    //! new_file replaced by another file before read-back is reported NEW_IMAGE_MISMATCH, not COMPLETE
+    void outputReplacedBeforeVerify();
+
   private:
     // ----------------------------------------------------------------------
     // Helper functions

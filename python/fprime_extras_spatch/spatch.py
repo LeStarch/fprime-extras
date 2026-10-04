@@ -53,13 +53,24 @@ def size_width_from_dictionary(path: str) -> int:
     """Read sizeof(FwSizeType) from an F Prime JSON topology dictionary"""
     import json
 
-    with open(path, encoding="utf-8") as handle:
-        dictionary = json.load(handle)
-    for definition in dictionary.get("typeDefinitions", []):
-        if definition.get("qualifiedName") == "FwSizeType":
-            bits = definition["underlyingType"]["size"]
-            if bits // 8 not in SIZE_WIDTHS:
-                raise SPatchError(f"dictionary FwSizeType is {bits} bits; SPatch supports 32 and 64")
+    if not path:
+        raise SPatchError("dictionary path is empty")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            dictionary = json.load(handle)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SPatchError(f"dictionary {path} is not valid JSON: {exc}") from exc
+    if not isinstance(dictionary, dict):
+        raise SPatchError(f"dictionary {path} is not a JSON object")
+    definitions = dictionary.get("typeDefinitions", [])
+    if not isinstance(definitions, list):
+        raise SPatchError(f"dictionary {path}: typeDefinitions is not a list")
+    for definition in definitions:
+        if isinstance(definition, dict) and definition.get("qualifiedName") == "FwSizeType":
+            underlying = definition.get("underlyingType")
+            bits = underlying.get("size") if isinstance(underlying, dict) else None
+            if not isinstance(bits, int) or isinstance(bits, bool) or bits % 8 or bits // 8 not in SIZE_WIDTHS:
+                raise SPatchError(f"dictionary FwSizeType size {bits!r} is not 32 or 64 bits")
             return bits // 8
     raise SPatchError("dictionary has no FwSizeType definition")
 
@@ -79,6 +90,20 @@ OP_SEEK = 3
 
 class SPatchError(ValueError):
     """Malformed or inapplicable patch"""
+
+
+def check_flight_limits(old_size: int, new_size: int, chunk_bytes: int) -> None:
+    """Reject geometry the flight decoder refuses with BAD_HEADER (DeltaCodecConfig.hpp caps)"""
+    if not 0 < chunk_bytes <= MAX_CHUNK_BYTES:
+        raise SPatchError(f"chunk_bytes {chunk_bytes} not in 1..{MAX_CHUNK_BYTES} (flight DELTA_MAX_CHUNK_BYTES)")
+    if old_size > MAX_IMAGE_SIZE or new_size > MAX_IMAGE_SIZE:
+        raise SPatchError(f"image sizes must not exceed {MAX_IMAGE_SIZE} bytes (flight DELTA_MAX_IMAGE_SIZE)")
+
+
+def check_coded_len(index: int, coded_len: int) -> None:
+    """Reject a chunk payload the flight decoder refuses with BAD_OPCODE"""
+    if coded_len > MAX_CODED_CHUNK_BYTES:
+        raise SPatchError(f"chunk {index} coded_len {coded_len} above flight DELTA_MAX_CODED_CHUNK_BYTES")
 
 
 def crc32(data: bytes, crc: int = 0) -> int:
@@ -279,8 +304,10 @@ class Header:
 
     @classmethod
     def unpack(cls, data: bytes) -> Header:
-        if len(data) < 8 or data[:4] != MAGIC:
+        if not MAGIC.startswith(data[:4]):
             raise SPatchError("bad magic")
+        if len(data) < 8:
+            raise SPatchError("patch shorter than header")
         version, flags, size_width = data[4], data[6], data[7]
         if version != VERSION or flags != 0:
             raise SPatchError("unsupported version or flags")
@@ -296,8 +323,7 @@ class Header:
         (header_crc,) = struct.unpack(">I", data[total - 4 : total])
         if crc32(data[: total - 4]) != header_crc:
             raise SPatchError("header CRC mismatch")
-        if chunk_bytes == 0:
-            raise SPatchError("chunk_bytes must be positive")
+        check_flight_limits(old_size, new_size, chunk_bytes)
         return cls(coder_id, old_size, old_crc, new_size, new_crc, chunk_bytes, size_width)
 
 
@@ -310,10 +336,9 @@ def create(
     ops: list[Op] | None = None,
     size_width: int = DEFAULT_SIZE_WIDTH,
 ) -> bytes:
-    if not 0 < chunk_bytes <= MAX_CHUNK_BYTES:
-        raise SPatchError(f"chunk_bytes must be in 1..{MAX_CHUNK_BYTES} (flight DELTA_MAX_CHUNK_BYTES)")
-    if len(old) > MAX_IMAGE_SIZE or len(new) > MAX_IMAGE_SIZE:
-        raise SPatchError(f"images must not exceed {MAX_IMAGE_SIZE} bytes (flight DELTA_MAX_IMAGE_SIZE)")
+    check_flight_limits(len(old), len(new), chunk_bytes)
+    if coder_id not in coders.ENCODERS:
+        raise SPatchError(f"unknown coder id {coder_id}")
     if ops is None:
         ops = ops_from_bsdiff(old, new, copy_min)
     header = Header(coder_id, len(old), crc32(old), len(new), crc32(new), chunk_bytes, size_width)
@@ -323,8 +348,7 @@ def create(
         start = index * chunk_bytes
         expected = new[start : start + chunk_bytes]
         coded = encode(raw)
-        if len(coded) > MAX_CODED_CHUNK_BYTES:
-            raise SPatchError(f"chunk {index} coded to {len(coded)} bytes, above flight DELTA_MAX_CODED_CHUNK_BYTES")
+        check_coded_len(index, len(coded))
         out.extend(header.pack_chunk_header(len(coded), crc32(expected)))
         out.extend(coded)
     return bytes(out)
@@ -332,10 +356,11 @@ def create(
 
 def iter_chunks(patch: bytes, header: Header) -> Iterator[tuple[int, int, bytes]]:
     pos = header.header_size
-    for _ in range(header.chunk_count):
+    for index in range(header.chunk_count):
         if pos + header.chunk_header_size > len(patch):
             raise SPatchError("truncated chunk header")
         coded_len, out_crc = header.unpack_chunk_header(patch, pos)
+        check_coded_len(index, coded_len)
         pos += header.chunk_header_size
         if pos + coded_len > len(patch):
             raise SPatchError("truncated chunk payload")
