@@ -10,7 +10,7 @@
 
 namespace Update {
 
-DeltaFileMedia::DeltaFileMedia() : m_reader(), m_writer(), m_readable(false), m_writable(false) {}
+DeltaFileMedia::DeltaFileMedia() : m_reader(), m_writer(), m_path(), m_readable(false), m_writable(false) {}
 
 DeltaFileMedia::~DeltaFileMedia() {
     this->close();
@@ -19,6 +19,7 @@ DeltaFileMedia::~DeltaFileMedia() {
 Os::File::Status DeltaFileMedia::open(const char* path, Access access) {
     FW_ASSERT(path != nullptr);
     this->close();
+    this->m_path = path;
     Os::File::Status status = Os::File::OP_OK;
     if (access == CREATE) {
         status = this->m_writer.open(path, Os::File::OPEN_CREATE, Os::File::OverwriteType::OVERWRITE);
@@ -115,7 +116,20 @@ DeltaMedia::Status DeltaFileMedia::flush() {
     if (!this->m_writable) {
         return OP_OK;
     }
-    return (this->m_writer.flush() == Os::File::OP_OK) ? OP_OK : IO_ERROR;
+    if (this->m_writer.flush() != Os::File::OP_OK) {
+        return IO_ERROR;
+    }
+    // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it
+    if (this->m_readable) {
+        this->m_reader.close();
+        this->m_readable =
+            (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ, Os::File::OverwriteType::NO_OVERWRITE) ==
+             Os::File::OP_OK);
+        if (!this->m_readable) {
+            return IO_ERROR;
+        }
+    }
+    return OP_OK;
 }
 
 }  // namespace Update

@@ -8,6 +8,7 @@
 #define Update_Delta_DeltaMedia_HPP
 
 #include "Fw/FPrimeBasicTypes.hpp"
+#include "Fw/Types/FileNameString.hpp"
 #include "Os/File.hpp"
 
 namespace Update {
@@ -43,7 +44,9 @@ class DeltaMedia {
 
 //! \brief DeltaMedia backed by Os::File
 //!
-//! READ_WRITE access uses one reader and one writer handle since Os::File offers no combined mode.
+//! READ_WRITE access uses one reader and one writer handle since Os::File offers no combined mode. Some file
+//! systems (FatFs) give each handle its own view of the file size, taken when the handle is opened, so flush()
+//! reopens the reader after committing the writer to make the written bytes readable.
 class DeltaFileMedia final : public DeltaMedia {
   public:
     enum Access {
@@ -73,6 +76,7 @@ class DeltaFileMedia final : public DeltaMedia {
   private:
     Os::File m_reader;
     Os::File m_writer;
+    Fw::FileNameString m_path;
     bool m_readable;
     bool m_writable;
 };
