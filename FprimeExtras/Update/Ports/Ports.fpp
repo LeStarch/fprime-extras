@@ -14,6 +14,35 @@ module Update {
         PERMANENT @< Set the image as the permanent software image
     }
 
+    @ Outcome of a delta-patch operation or step
+    enum DeltaPatchStatus : U8 {
+        OP_OK,              @< Success
+        BUSY,               @< Another patch is in progress
+        OPEN_FAILED,        @< Could not open old/patch/new file
+        BAD_HEADER,         @< Magic/version/flags/CRC/geometry invalid in SPatch header
+        OLD_IMAGE_MISMATCH, @< Old image size or CRC differs from header
+        TRUNCATED,          @< Patch ended before the declared output was produced
+        CHUNK_CRC,          @< Chunk output CRC failed
+        BAD_OPCODE,         @< Unknown/invalid op, operand out of bounds, or malformed coder payload
+        READ_ERROR,         @< Media read failed
+        WRITE_ERROR,        @< Media write failed
+        NEW_IMAGE_MISMATCH, @< Final new image CRC (or stored size/CRC on read-back) differs from header
+        PATCH_SIZE_MISMATCH, @< Patch file has trailing bytes after the final chunk
+        OUTPUT_STALE,       @< Existing new file is larger than the header's new size
+        ABORTED,            @< Operator abort
+        SAME_FILE,          @< old_file, patch_file and new_file must be distinct
+        CODER_MISMATCH,     @< Valid header names a coder other than the one installed in flight
+        SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
+    }
+
+    @ State of the DeltaPatcher
+    enum DeltaPatchState : U8 {
+        IDLE,
+        PATCHING,
+        FAILED,
+        COMPLETE
+    }
+
     @ Port used to report a status back from a given update action
     port UpdateResponse(
         status: UpdateStatus @< Status to supplied to action
