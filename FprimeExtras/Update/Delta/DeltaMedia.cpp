@@ -7,6 +7,7 @@
 #include "FprimeExtras/Update/Delta/DeltaMedia.hpp"
 
 #include "Fw/Types/Assert.hpp"
+#include "Os/FileSystem.hpp"
 
 namespace Update {
 
@@ -16,9 +17,19 @@ DeltaFileMedia::~DeltaFileMedia() {
     this->close();
 }
 
+bool DeltaFileMedia::isRegularFile(const char* path) {
+    FW_ASSERT(path != nullptr);
+    return Os::FileSystem::getPathType(path) == Os::FileSystem::PathType::FILE;
+}
+
 Os::File::Status DeltaFileMedia::open(const char* path, Access access) {
     FW_ASSERT(path != nullptr);
     this->close();
+    const Os::FileSystem::PathType type = Os::FileSystem::getPathType(path);
+    const bool mayCreate = (access != READ_ONLY) && (type == Os::FileSystem::PathType::NOT_EXIST);
+    if ((type != Os::FileSystem::PathType::FILE) && !mayCreate) {
+        return (type == Os::FileSystem::PathType::NOT_EXIST) ? Os::File::DOESNT_EXIST : Os::File::INVALID_ARGUMENT;
+    }
     this->m_path = path;
     Os::File::Status status = Os::File::OP_OK;
     if (access == CREATE) {
@@ -100,7 +111,7 @@ DeltaMedia::Status DeltaFileMedia::write(FwSizeType offset, const U8* buffer, Fw
     FwSizeType total = 0;
     for (FwSizeType pass = 0; pass < length && total < length; pass++) {
         FwSizeType requested = length - total;
-        const Os::File::Status status = this->m_writer.write(buffer + total, requested, Os::File::WaitType::WAIT);
+        const Os::File::Status status = this->m_writer.write(buffer + total, requested, Os::File::WaitType::NO_WAIT);
         if (status != Os::File::OP_OK) {
             return IO_ERROR;
         }
@@ -122,14 +133,27 @@ DeltaMedia::Status DeltaFileMedia::flush() {
     // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it
     if (this->m_readable) {
         this->m_reader.close();
-        this->m_readable =
-            (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ, Os::File::OverwriteType::NO_OVERWRITE) ==
-             Os::File::OP_OK);
+        this->m_readable = (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ,
+                                                Os::File::OverwriteType::NO_OVERWRITE) == Os::File::OP_OK);
         if (!this->m_readable) {
             return IO_ERROR;
         }
     }
     return OP_OK;
+}
+
+DeltaMedia::Status DeltaFileMedia::refresh() {
+    if (!this->m_readable) {
+        return NOT_OPEN;
+    }
+    this->m_reader.close();
+    this->m_readable = false;
+    if (!DeltaFileMedia::isRegularFile(this->m_path.toChar())) {
+        return IO_ERROR;
+    }
+    this->m_readable = (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ,
+                                            Os::File::OverwriteType::NO_OVERWRITE) == Os::File::OP_OK);
+    return this->m_readable ? OP_OK : IO_ERROR;
 }
 
 }  // namespace Update
