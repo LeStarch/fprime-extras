@@ -32,18 +32,24 @@ class DeltaCodec final {
     //! Outcome of begin()/step(); mirrors Update.DeltaPatchStatus
     enum Status {
         OP_OK,
-        BAD_HEADER,          //!< Magic, version, flags, CRC, or geometry of the SPatch header is invalid
-        OLD_IMAGE_MISMATCH,  //!< Old image size or CRC differs from the header
-        TRUNCATED,           //!< Patch ended before the declared content
-        CHUNK_CRC,           //!< Chunk output CRC failed
-        BAD_OPCODE,          //!< Unknown op, operand out of bounds, or coder reported malformed payload
-        READ_ERROR,          //!< Media read failed
-        WRITE_ERROR,         //!< Media write failed
-        NEW_IMAGE_MISMATCH,  //!< Final new image CRC, or stored size/CRC on read-back, differs from the header
+        BAD_HEADER,           //!< Magic, version, flags, CRC, or geometry of the SPatch
+                              //!< header is invalid
+        OLD_IMAGE_MISMATCH,   //!< Old image size or CRC differs from the header
+        TRUNCATED,            //!< Patch ended before the declared content
+        CHUNK_CRC,            //!< Chunk output CRC failed
+        BAD_OPCODE,           //!< Unknown op, operand out of bounds, or coder reported
+                              //!< malformed payload
+        READ_ERROR,           //!< Media read failed
+        WRITE_ERROR,          //!< Media write failed
+        NEW_IMAGE_MISMATCH,   //!< Final new image CRC, or stored size/CRC on
+                              //!< read-back, differs from the header
         PATCH_SIZE_MISMATCH,  //!< Patch has bytes beyond the last chunk
-        OUTPUT_STALE,         //!< Existing new image is larger than the target; caller must recreate it
-        CODER_MISMATCH,       //!< Header is valid but names a coder other than the installed one
-        SIZE_WIDTH_MISMATCH   //!< Header sizes were serialized with a different FwSizeType width than this build's
+        OUTPUT_STALE,         //!< Existing new image is larger than the target; caller must
+                              //!< recreate it
+        CODER_MISMATCH,       //!< Header is valid but names a coder other than the
+                              //!< installed one
+        SIZE_WIDTH_MISMATCH   //!< Header sizes were serialized with a different
+                              //!< FwSizeType width than this build's
     };
 
     //! Engine state
@@ -52,7 +58,8 @@ class DeltaCodec final {
         VERIFY_NEW,  //!< Verifying chunks already present in the new image (resume)
         VERIFY_OLD,  //!< Verifying the old image CRC
         PATCHING,
-        VERIFY_FINAL,  //!< Reading the flushed new image back and checking its CRC before reporting COMPLETE
+        VERIFY_FINAL,  //!< Reading the flushed new image back and checking its CRC
+                       //!< before reporting COMPLETE
         COMPLETE,
         FAILED
     };
@@ -131,20 +138,28 @@ class DeltaCodec final {
         Op op;                      //!< Operation in progress
         bool opActive;              //!< True while op has bytes remaining
         FwSizeType opRemaining;     //!< Output bytes remaining for op
-        bool seekPending;           //!< A SEEK was parsed and must be followed by a producing op
-        FwSizeType opCount;         //!< Operations parsed in this chunk, capped at DELTA_MAX_OPS_PER_CHUNK
+        bool seekPending;           //!< A SEEK was parsed and must be followed by a producing
+                                    //!< op
+        FwSizeType opCount;         //!< Operations parsed in this chunk, capped at
+                                    //!< DELTA_MAX_OPS_PER_CHUNK
     };
 
     Status fail(Status status);
+    //! Classify a failed media read: the documented mismatch status when the
+    //! media no longer has the size captured at begin(), READ_ERROR otherwise
+    Status readFailure(DeltaMedia& media, FwSizeType expectedSize, Status mismatch);
     Status readChunkHeader(FwSizeType& codedLength, U32& crc);
     Status verifyNewStep();
     Status verifyOldStep();
     Status patchChunk();
+    Status beginChunk();
+    Status finishChunk();
     Status finish();
     Status verifyFinalStep();
     Status fillWindow(Chunk& chunk);
     Status parseOp(Chunk& chunk);
     Status executeOp(Chunk& chunk);
+    Status readOld(FwSizeType offset, U8* out, FwSizeType& length);
     Status flushOutput(Chunk& chunk);
     enum VarintResult { VARINT_OK, VARINT_NEED_MORE, VARINT_INVALID };
     VarintResult readVarint(FwSizeType start, U64& value, FwSizeType& length) const;
@@ -160,7 +175,14 @@ class DeltaCodec final {
     U8 m_patchBuffer[DELTA_PATCH_BUFFER_SIZE];
     U8 m_windowBuffer[DELTA_WINDOW_SIZE];
     U8 m_outBuffer[DELTA_OUTPUT_BUFFER_SIZE];
+    U8 m_oldBuffer[DELTA_OLD_BUFFER_SIZE];
     DeltaWindow m_window;
+    Chunk m_chunk;                //!< Chunk in progress; persists across steps when the I/O
+                                  //!< budget is exhausted
+    bool m_chunkActive;           //!< m_chunk holds a partially applied chunk
+    FwSizeType m_oldCacheOffset;  //!< Old-image offset of m_oldBuffer[0]
+    FwSizeType m_oldCacheLength;  //!< Valid bytes in m_oldBuffer (0 when empty)
+    FwSizeType m_ioCount;         //!< Media reads and writes issued in the current step
 
     State m_state;
     Status m_lastStatus;

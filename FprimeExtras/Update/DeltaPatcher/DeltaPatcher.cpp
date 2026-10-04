@@ -9,6 +9,12 @@
 
 #include "Fw/Types/FileNameString.hpp"
 #include "Os/FilePathUtils.hpp"
+#include "Os/FileSystem.hpp"
+
+#if defined(TGT_OS_TYPE_LINUX) || defined(TGT_OS_TYPE_DARWIN)
+#include <sys/stat.h>
+#define DELTA_PATCHER_HAS_FILE_IDENTITY 1
+#endif
 
 namespace Update {
 
@@ -57,22 +63,44 @@ void DeltaPatcher ::run_handler(FwIndexType portNum, U32 context) {
 // Helpers
 // ----------------------------------------------------------------------
 
-bool DeltaPatcher::distinctPaths(const Fw::CmdStringArg& first,
-                                 const Fw::CmdStringArg& second,
-                                 const Fw::CmdStringArg& third) {
+DeltaPatcher::PathCheck DeltaPatcher::checkPaths(const Fw::CmdStringArg& first,
+                                                 const Fw::CmdStringArg& second,
+                                                 const Fw::CmdStringArg& third) {
     const Fw::CmdStringArg* const paths[] = {&first, &second, &third};
     Fw::FileNameString resolved[3];
     for (FwSizeType i = 0; i < 3; i++) {
         char buffer[Os::FilePathUtils::MAX_PATH_LENGTH];
         const Os::FilePathUtils::Status status =
             Os::FilePathUtils::resolveFromCwd(paths[i]->toChar(), buffer, sizeof(buffer));
-        if (status != Os::FilePathUtils::VALID) {
-            // Unresolvable spellings cannot be proven distinct
-            return false;
+        if (status != Os::FilePathUtils::VALID || paths[i]->length() == 0) {
+            return PATHS_INVALID;
         }
         resolved[i] = buffer;
     }
-    return (resolved[0] != resolved[1]) && (resolved[0] != resolved[2]) && (resolved[1] != resolved[2]);
+    for (FwSizeType i = 0; i < 3; i++) {
+        for (FwSizeType j = i + 1; j < 3; j++) {
+            if ((resolved[i] == resolved[j]) ||
+                DeltaPatcher::sameIdentity(resolved[i].toChar(), resolved[j].toChar())) {
+                return PATHS_ALIASED;
+            }
+        }
+    }
+    return PATHS_DISTINCT;
+}
+
+bool DeltaPatcher::sameIdentity(const char* first, const char* second) {
+    FW_ASSERT(first != nullptr);
+    FW_ASSERT(second != nullptr);
+#if defined(DELTA_PATCHER_HAS_FILE_IDENTITY)
+    struct stat firstStat;
+    struct stat secondStat;
+    if ((::stat(first, &firstStat) != 0) || (::stat(second, &secondStat) != 0)) {
+        return false;
+    }
+    return (firstStat.st_dev == secondStat.st_dev) && (firstStat.st_ino == secondStat.st_ino);
+#else
+    return false;
+#endif
 }
 
 // ----------------------------------------------------------------------
@@ -90,17 +118,23 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
         return;
     }
-    // The old image is never written: refuse aliased paths before any file is opened. Paths are compared after
-    // textual resolution (`.`, `..`, duplicate separators, CWD) so spellings of one file cannot slip past.
-    if (!DeltaPatcher::distinctPaths(old_file, patch_file, new_file)) {
-        this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::SAME_FILE);
-        this->tlmWrite_LastStatus(DeltaPatchStatus::SAME_FILE);
+    // The old image is never written: refuse aliased paths before any file is
+    // opened. Paths are compared after textual resolution (`.`, `..`, duplicate
+    // separators, CWD) and, where the platform exposes file identity, by
+    // device/inode so hard links cannot slip past. Symbolic links and special files are refused by the media open.
+    const PathCheck check = DeltaPatcher::checkPaths(old_file, patch_file, new_file);
+    if (check != PATHS_DISTINCT) {
+        const DeltaPatchStatus status =
+            (check == PATHS_ALIASED) ? DeltaPatchStatus::SAME_FILE : DeltaPatchStatus::OPEN_FAILED;
+        this->log_WARNING_HI_PatchRejected(status);
+        this->tlmWrite_LastStatus(status);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
         return;
     }
     this->closeMedia();
     this->m_codec.reset();
 
+    const bool newExisted = Os::FileSystem::exists(new_file.toChar());
     bool opened = (this->m_oldMedia.open(old_file.toChar(), DeltaFileMedia::READ_ONLY) == Os::File::OP_OK);
     opened = opened && (this->m_patchMedia.open(patch_file.toChar(), DeltaFileMedia::READ_ONLY) == Os::File::OP_OK);
     opened = opened && (this->m_newMedia.open(new_file.toChar(), DeltaFileMedia::READ_WRITE) == Os::File::OP_OK);
@@ -118,6 +152,10 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
     if (status != DeltaCodec::OP_OK) {
         this->closeMedia();
         this->m_codec.reset();
+        if (!newExisted) {
+            // A rejected header must not leave an empty output file behind
+            (void)Os::FileSystem::removeFile(new_file.toChar());
+        }
         this->log_WARNING_HI_PatchRejected(DeltaPatcher::toStatus(status));
         this->tlmWrite_LastStatus(DeltaPatcher::toStatus(status));
         this->m_state = DeltaPatchState::FAILED;

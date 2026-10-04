@@ -40,13 +40,25 @@ class DeltaMedia {
 
     //! Commit written bytes to storage so subsequent reads observe them; OP_OK when nothing is buffered
     virtual Status flush() = 0;
+
+    //! Re-resolve the media before read-back verification. Media addressed by a
+    //! name that can be replaced beneath an open handle (files) re-open by name
+    //! here so verification attests to what the name now holds; media with a
+    //! fixed identity (flash regions, memory) keep the default.
+    virtual Status refresh() { return OP_OK; }
 };
 
 //! \brief DeltaMedia backed by Os::File
 //!
-//! READ_WRITE access uses one reader and one writer handle since Os::File offers no combined mode. Some file
-//! systems (FatFs) give each handle its own view of the file size, taken when the handle is opened, so flush()
-//! reopens the reader after committing the writer to make the written bytes readable.
+//! READ_WRITE access uses one reader and one writer handle since Os::File
+//! offers no combined mode. Some file systems (FatFs) give each handle its own
+//! view of the file size, taken when the handle is opened, so flush() reopens
+//! the reader after committing the writer to make the written bytes readable.
+//!
+//! open() requires the path to name a regular file (or, for READ_WRITE/CREATE,
+//! nothing yet): directories, FIFOs, devices and symbolic links are refused
+//! with INVALID_ARGUMENT before any blocking open() is attempted. Writes are
+//! issued without a per-write sync; flush() commits them.
 class DeltaFileMedia final : public DeltaMedia {
   public:
     enum Access {
@@ -72,6 +84,10 @@ class DeltaFileMedia final : public DeltaMedia {
     Status read(FwSizeType offset, U8* buffer, FwSizeType length) override;
     Status write(FwSizeType offset, const U8* buffer, FwSizeType length) override;
     Status flush() override;
+    Status refresh() override;
+
+    //! True when `path` names a regular file (not a directory, link, FIFO or device)
+    static bool isRegularFile(const char* path);
 
   private:
     Os::File m_reader;

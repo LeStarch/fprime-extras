@@ -94,9 +94,22 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     void closeMedia();
 
     //! True when the three paths resolve (textually, via Os::FilePathUtils) to three different files
-    static bool distinctPaths(const Fw::CmdStringArg& first,
-                              const Fw::CmdStringArg& second,
-                              const Fw::CmdStringArg& third);
+    enum PathCheck {
+        PATHS_DISTINCT,  //!< Three distinct, well-formed paths
+        PATHS_INVALID,   //!< A path could not be resolved (empty, too long,
+                         //!< malformed)
+        PATHS_ALIASED    //!< Two paths name the same file (textually or, where the
+                         //!< platform exposes it, by identity)
+    };
+
+    //! Resolve the three paths and check that they are distinct
+    static PathCheck checkPaths(const Fw::CmdStringArg& first,
+                                const Fw::CmdStringArg& second,
+                                const Fw::CmdStringArg& third);
+
+    //! True when both paths exist and name the same underlying file (hard links);
+    //! false where the platform offers no file identity
+    static bool sameIdentity(const char* first, const char* second);
 
     //! Map an engine status onto the reported status enumeration
     static DeltaPatchStatus toStatus(DeltaCodec::Status status);

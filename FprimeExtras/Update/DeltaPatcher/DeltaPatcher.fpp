@@ -10,16 +10,22 @@ module Update {
     @ Applies an uplinked SPatch file to an on-board old image, producing a new image file suitable for
     @ Updater.UPDATE_IMAGE_FROM. The component is queued: on each `run` invocation up to MAX_DISPATCH_PER_TICK queued
     @ commands are dispatched, then one bounded step of patch work is performed: either CRC verification of up to
-    @ DELTA_VERIFY_BYTES_PER_STEP bytes, or one chunk of at most DELTA_MAX_CHUNK_BYTES output bytes. Each step performs
-    @ blocking Os::File I/O on the rate-group thread, so `run` should be driven from a slow, non-critical rate group.
+    @ DELTA_VERIFY_BYTES_PER_STEP bytes, or chunk work issuing at most DELTA_MAX_IO_PER_STEP media reads/writes. Each
+    @ step performs blocking Os::File I/O on the rate-group thread, so `run` should be driven from a slow, non-critical
+    @ rate group. `run` is mandatory and must be connected to exactly one rate group: it is the only place queued
+    @ commands are dispatched, so an unconnected `run` leaves APPLY_PATCH unanswered, and a second driver would
+    @ interleave patch steps (the port is guarded, so concurrent calls serialize rather than corrupt state).
     @
-    @ The old image is never modified (old_file, patch_file and new_file must name distinct files). If the new file
-    @ already holds a prefix of CRC-verified chunks (e.g. after a reboot), patching resumes at the first unverified
-    @ chunk. RAM usage is fixed at construction and the engine never allocates.
+    @ The old image is never modified: old_file, patch_file and new_file must name distinct regular files (new_file may
+    @ also be absent); directories, links and special files are rejected. Command path arguments are limited to
+    @ FW_CMD_STRING_MAX_SIZE characters by the framework; deployments using longer update paths raise that constant.
+    @ If the new file already holds a prefix of CRC-verified chunks (e.g. after a reboot), patching resumes at the
+    @ first unverified chunk. RAM usage is fixed at construction and the engine never allocates.
     queued component DeltaPatcher {
 
-        @ Rate-group tick: dispatches queued commands, then performs one bounded step of patch work
-        sync input port run: Svc.Sched
+        @ Rate-group tick: dispatches queued commands, then performs one bounded step of patch work. Mandatory;
+        @ connect exactly one rate group.
+        guarded input port run: Svc.Sched
 
         @ Emitted on successful completion with (new_file, new_crc32). Left unconnected by default: operators install
         @ the image with updater.UPDATE_IMAGE_FROM. Must not be wired to worker.updateImage (updater owns the worker).
@@ -28,9 +34,9 @@ module Update {
         @ Start applying patch_file to old_file writing new_file. Resumes if new_file already holds verified chunks.
         @ The command completes (OK or EXECUTION_ERROR) when the patch finishes or fails.
         async command APPLY_PATCH(
-            old_file: string size FileNameStringSize @< Existing image (never modified)
-            patch_file: string size FileNameStringSize @< Uplinked .spatch file
-            new_file: string size FileNameStringSize @< Output image (created or extended)
+            old_file: string size FW_CMD_STRING_MAX_SIZE @< Existing image (never modified)
+            patch_file: string size FW_CMD_STRING_MAX_SIZE @< Uplinked .spatch file
+            new_file: string size FW_CMD_STRING_MAX_SIZE @< Output image (created or extended)
         ) hook
 
         @ Abort an in-progress patch; the partial new_file is retained for later resume

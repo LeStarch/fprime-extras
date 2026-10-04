@@ -99,7 +99,11 @@ class DeltaCoderLzss final : public DeltaCoder {
     U8 id() const override { return ID_LZSS; }
     void reset() override;
     Status decode(const U8* in, FwSizeType inLen, FwSizeType& consumed, DeltaWindow& window) override;
-    bool pending() const override { return (this->m_mode == MATCH_LENGTH) || (this->m_mode == MATCH_COPY); }
+    //! A flag byte must introduce at least one item: a trailing flag byte with no items is surplus data
+    bool pending() const override {
+        return (this->m_mode == MATCH_LENGTH) || (this->m_mode == MATCH_COPY) ||
+               ((this->m_mode == ITEM) && (this->m_bitsLeft == 8));
+    }
 
   private:
     enum Mode : U8 { FLAGS, ITEM, MATCH_LENGTH, MATCH_COPY };

@@ -7,6 +7,7 @@
 
 #include "DeltaPatcherTester.hpp"
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -189,8 +190,9 @@ void DeltaPatcherTester ::coderMismatch() {
 
 void DeltaPatcherTester ::sizeWidthMismatch() {
   // Valid LZSS patch serialized with the other FwSizeType width
-  const U8* patch = (sizeof(FwSizeType) == 8) ? PATCH_LZSS_W4 : PATCH_LZSS_W8;
-  const FwSizeType size = (sizeof(FwSizeType) == 8) ? PATCH_LZSS_W4_SIZE : PATCH_LZSS_W8_SIZE;
+  const U8 *patch = (sizeof(FwSizeType) == 8) ? PATCH_LZSS_W4 : PATCH_LZSS_W8;
+  const FwSizeType size =
+      (sizeof(FwSizeType) == 8) ? PATCH_LZSS_W4_SIZE : PATCH_LZSS_W8_SIZE;
   writeFile(this->m_patch, patch, size);
   this->apply(1);
   ASSERT_EVENTS_PatchRejected_SIZE(1);
@@ -388,6 +390,110 @@ void DeltaPatcherTester ::sameFile() {
   const std::string old = readFile(this->m_old);
   ASSERT_EQ(old.size(), OLD_IMAGE_SIZE);
   ASSERT_EQ(0, memcmp(old.data(), OLD_IMAGE, OLD_IMAGE_SIZE));
+}
+
+void DeltaPatcherTester ::sameFileHardLink() {
+  const std::string link = this->m_dir + "/linked.bin";
+  ASSERT_EQ(::link(this->m_old.c_str(), link.c_str()), 0);
+  this->sendCmd_APPLY_PATCH(0, 1, Fw::CmdStringArg(this->m_old.c_str()),
+                            Fw::CmdStringArg(this->m_patch.c_str()),
+                            Fw::CmdStringArg(link.c_str()));
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::SAME_FILE);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::VALIDATION_ERROR);
+  ASSERT_EVENTS_PatchStarted_SIZE(0);
+  const std::string old = readFile(this->m_old);
+  ASSERT_EQ(old.size(), OLD_IMAGE_SIZE);
+  ASSERT_EQ(0, memcmp(old.data(), OLD_IMAGE, OLD_IMAGE_SIZE));
+}
+
+void DeltaPatcherTester ::specialFiles() {
+  const std::string fifo = this->m_dir + "/fifo";
+  ASSERT_EQ(::mkfifo(fifo.c_str(), 0600), 0);
+  const std::string symlinkPath = this->m_dir + "/old-link.bin";
+  ASSERT_EQ(::symlink(this->m_old.c_str(), symlinkPath.c_str()), 0);
+  struct Case {
+    std::string oldPath;
+    std::string patchPath;
+    std::string newPath;
+  };
+  const Case cases[] = {
+      {fifo, this->m_patch, this->m_new}, // FIFO with no peer: a blocking open
+                                          // would hang the rate group
+      {this->m_old, this->m_dir, this->m_new}, // directory as patch
+      {this->m_old, this->m_patch, fifo},      // FIFO as output
+      {symlinkPath, this->m_patch,
+       this->m_new}, // symlink to the old image (alias not visible textually)
+      {this->m_old, this->m_patch, this->m_dir}, // directory as output
+  };
+  U32 seq = 1;
+  for (const Case &c : cases) {
+    this->sendCmd_APPLY_PATCH(0, seq, Fw::CmdStringArg(c.oldPath.c_str()),
+                              Fw::CmdStringArg(c.patchPath.c_str()),
+                              Fw::CmdStringArg(c.newPath.c_str()));
+    this->invoke_to_run(0, 0);
+    ASSERT_EVENTS_PatchRejected_SIZE(seq);
+    ASSERT_EVENTS_PatchRejected(seq - 1, DeltaPatchStatus::OPEN_FAILED);
+    ASSERT_CMD_RESPONSE_SIZE(seq);
+    ASSERT_CMD_RESPONSE(seq - 1, DeltaPatcher::OPCODE_APPLY_PATCH, seq,
+                        Fw::CmdResponse::EXECUTION_ERROR);
+    seq++;
+  }
+  ASSERT_EVENTS_PatchStarted_SIZE(0);
+  ASSERT_EQ(::access(this->m_new.c_str(), F_OK), -1); // nothing created
+  const std::string old = readFile(this->m_old);
+  ASSERT_EQ(old.size(), OLD_IMAGE_SIZE);
+  ASSERT_EQ(0, memcmp(old.data(), OLD_IMAGE, OLD_IMAGE_SIZE));
+}
+
+void DeltaPatcherTester ::badHeaderLeavesNoOutput() {
+  std::vector<U8> patch(PATCH_LZSS, PATCH_LZSS + PATCH_LZSS_SIZE);
+  patch[0] ^= 0xFF;
+  writeFile(this->m_patch, patch.data(), patch.size());
+  this->apply(1);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BAD_HEADER);
+  ASSERT_EQ(::access(this->m_new.c_str(), F_OK), -1);
+  // An output that already existed is left alone
+  writeFile(this->m_new, OLD_IMAGE, 10);
+  this->apply(2);
+  ASSERT_EVENTS_PatchRejected_SIZE(2);
+  ASSERT_EQ(readFile(this->m_new).size(), 10u);
+}
+
+void DeltaPatcherTester ::outputReplacedBeforeVerify() {
+  this->apply(1);
+  ASSERT_EVENTS_PatchStarted_SIZE(1);
+  // Tick until every chunk is written but read-back has not begun
+  U32 ticks = 0;
+  while (ticks < MAX_TICKS &&
+         this->component.m_codec.state() == DeltaCodec::PATCHING &&
+         this->component.m_codec.chunkIndex() <
+             this->component.m_codec.chunkCount()) {
+    this->invoke_to_run(0, 0);
+    ticks++;
+  }
+  ASSERT_EQ(this->component.m_codec.state(), DeltaCodec::PATCHING);
+  ASSERT_EQ(this->component.m_codec.chunkIndex(),
+            this->component.m_codec.chunkCount());
+  // Replace the output path with a same-sized impostor; the patcher's open
+  // handle still refers to the (now orphaned) correct image, so only a by-name
+  // re-resolution can catch this
+  const std::string impostor = this->m_dir + "/impostor.bin";
+  std::vector<U8> junk(NEW_IMAGE_SIZE, 0x5A);
+  writeFile(impostor, junk.data(), junk.size());
+  ASSERT_EQ(::rename(impostor.c_str(), this->m_new.c_str()), 0);
+  ticks += this->runUntilResponse();
+  ASSERT_LT(ticks, static_cast<U32>(MAX_TICKS));
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::EXECUTION_ERROR);
+  ASSERT_EVENTS_PatchComplete_SIZE(0);
+  ASSERT_from_patchComplete_SIZE(0);
+  ASSERT_EVENTS_ChunkFailed_SIZE(1);
+  ASSERT_EQ(this->eventHistory_ChunkFailed->at(0).status,
+            DeltaPatchStatus::NEW_IMAGE_MISMATCH);
 }
 
 } // namespace Update
