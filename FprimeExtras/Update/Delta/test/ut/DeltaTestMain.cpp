@@ -242,7 +242,7 @@ TEST(DeltaCoder, LzssHandCrafted) {
             DeltaCoder::MALFORMED);
   // A trailing flag byte that introduces no item is surplus: the coder stays
   // pending so the chunk is rejected (the ground decoder applies the same rule)
-  const U8 emptyGroup[] = {0x40, 'a', 0x00};
+  const U8 emptyGroup[] = {0x00, 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 0x00};
   out.clear();
   ASSERT_EQ(decodeAll(coder, emptyGroup, sizeof emptyGroup, 100, 100, out),
             DeltaCoder::OP_OK);
@@ -1140,6 +1140,47 @@ TEST(DeltaCodec, FailedChunkNeverCommitsOutput) {
   EXPECT_EQ(codec.resumedChunks(), bad);
   EXPECT_EQ(newMedia.data,
             toVector(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE));
+}
+
+TEST(DeltaCodec, IoBudgetBoundsResumeVerify) {
+  // REQ: the per-step media I/O cap also holds while re-verifying an existing
+  // output on resume, where a tiny chunk_bytes would otherwise cost one data
+  // read plus one chunk-header read per byte of image in a single tick
+  DeltaCoderNone coder;
+  const FwSizeType imageSize = 600;
+  const std::vector<U8> image = pseudoRandom(imageSize, 11);
+  std::vector<std::vector<U8>> chunks(imageSize);
+  for (FwSizeType i = 0; i < imageSize; i++) {
+    putCopy(chunks[i], 1); // chunk_bytes = 1: one COPY per chunk
+  }
+  const std::vector<U8> patch = buildNonePatch(image, image, 1, chunks);
+  MemoryMedia oldMedia(image.data(), image.size());
+  MemoryMedia patchMedia(patch.data(), patch.size());
+  MemoryMedia newMedia(image.data(), image.size()); // complete output present
+  DeltaCodec codec(coder);
+  ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+  ASSERT_EQ(codec.state(), DeltaCodec::VERIFY_NEW);
+
+  U32 verifySteps = 0;
+  U32 maxIoPerStep = 0;
+  for (U32 i = 0; i < 1000 && codec.state() == DeltaCodec::VERIFY_NEW; i++) {
+    const U32 before =
+        oldMedia.reads + patchMedia.reads + newMedia.reads + newMedia.writes;
+    ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
+    const U32 io = oldMedia.reads + patchMedia.reads + newMedia.reads +
+                   newMedia.writes - before;
+    maxIoPerStep = (io > maxIoPerStep) ? io : maxIoPerStep;
+    verifySteps++;
+  }
+  // Each pass issues one data read and one chunk-header read before the
+  // budget is re-checked
+  EXPECT_LE(maxIoPerStep, DELTA_MAX_IO_PER_STEP + 2);
+  EXPECT_GT(verifySteps, 1u);
+  U32 steps = 0;
+  ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
+  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.resumedChunks(), imageSize);
+  EXPECT_EQ(newMedia.writes, 0u);
 }
 
 TEST(DeltaCodec, IoBudgetSpansSteps) {

@@ -46,6 +46,7 @@ command response delivered through `updateImageDone`. Automatic installation wou
 component accepts commands into its queue but never dispatches them (and `Svc::CmdDispatcher` accumulates
 unanswered entries). Each `run` performs `Os::File` I/O on the rate-group thread, bounded to
 `DELTA_MAX_IO_PER_STEP` media calls (a chunk needing more carries over to the next tick) and at most
-`DELTA_VERIFY_BYTES_PER_STEP` bytes of CRC, so use a slow, non-critical rate group. `APPLY_PATCH` paths are limited
-to `FW_CMD_STRING_MAX_SIZE` (F Prime default 40) characters. See
+`DELTA_VERIFY_BYTES_PER_STEP` bytes of CRC, so use a slow, non-critical rate group. `APPLY_PATCH` paths are
+truncated on board to `FW_CMD_STRING_MAX_SIZE` (F Prime default 40) characters and all three must fit
+`FW_CMD_ARG_BUFFER_MAX_SIZE`. See
 `FprimeExtras/Update/DeltaPatcher/docs/sdd.md`.

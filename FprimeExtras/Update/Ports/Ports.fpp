@@ -18,7 +18,7 @@ module Update {
     enum DeltaPatchStatus : U8 {
         OP_OK,              @< Success
         BUSY,               @< Another patch is in progress
-        OPEN_FAILED,        @< Could not open old/patch/new file
+        OPEN_FAILED,        @< old/patch/new path is not a regular file or could not be opened
         BAD_HEADER,         @< Magic/version/flags/CRC/geometry invalid in SPatch header
         OLD_IMAGE_MISMATCH, @< Old image size or CRC differs from header
         TRUNCATED,          @< Patch ended before the declared output was produced
@@ -32,7 +32,8 @@ module Update {
         ABORTED,            @< Operator abort
         SAME_FILE,          @< old_file, patch_file and new_file must be distinct
         CODER_MISMATCH,     @< Valid header names a coder other than the one installed in flight
-        SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
+        SIZE_WIDTH_MISMATCH, @< Header sizes were serialized with a different FwSizeType width than the flight build
+        BAD_PATH            @< A command path is empty or cannot be resolved
     }
 
     @ State of the DeltaPatcher

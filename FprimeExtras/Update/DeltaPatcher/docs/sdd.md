@@ -26,21 +26,22 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
             APPLY_PATCH / ABORT_PATCH (async, queued)
                           |
  rateGroup ---> run ----> DeltaPatcher ----> patchComplete (optional)
-                            |  DeltaCodec (streaming engine, 3 x 256 B buffers)
+                            |  DeltaCodec (streaming engine, 4 fixed buffers: patch/output/old 128 B, window 256 B)
                             |    DeltaCoder (LZSS default | RLE | None | project)
                             |    DeltaMedia x3 (Os::File; flash region later)
 ```
 
 * **Queued component.** `run_handler` dispatches at most `MAX_DISPATCH_PER_TICK` queued messages and then, if
   patching, performs exactly one `DeltaCodec::step()`. A step verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes
-  or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
+  or advances the current chunk (a chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
   with `BAD_HEADER`/`BAD_OPCODE`. Because a coder may expand its input (LZSS up to 129:1), the decoded operation
   stream is additionally bounded by construction: a `SEEK` must be followed by a producing op, so a chunk never
   parses more than `2 * chunk_bytes` operations before it is rejected with `BAD_OPCODE`. Per-tick work is thus
   bounded by flight configuration rather than by the patch. Media I/O is bounded separately: a step issues at most
   `DELTA_MAX_IO_PER_STEP` media reads/writes (plus the up-to-three calls of the operation in flight) and a chunk
-  that needs more carries over to the next tick; adjacent `COPY`/`ADD` reads are served from a `DELTA_OLD_BUFFER_SIZE`
+  that needs more carries over to the next tick (the resume, old-image and final read-back verification passes
+  observe the same cap); adjacent `COPY`/`ADD` reads are served from a `DELTA_OLD_BUFFER_SIZE`
   old-image cache so operation-dense patches do not cost one media read per operation. The step performs
   `Os::File` I/O on the rate-group thread (`NO_WAIT` writes; the media is flushed once per committed chunk and once
   before read-back, never per write); drive `run` from a slow, non-critical rate group. Both commands use the FPP `hook` overflow
@@ -49,7 +50,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 * **Media.** `old_file`, `patch_file` and `new_file` must be distinct (see *Path aliasing*). Before any open,
   `DeltaFileMedia` classifies each path with `Os::FileSystem::getPathType`: `old_file` and `patch_file` must be
   regular files and `new_file` must be a regular file or absent; directories, FIFOs, devices and symbolic links are
-  rejected `OPEN_FAILED` so a path with no writer can never block the rate-group thread in `open()`. `old_file` and
+  rejected `OPEN_FAILED` (an empty or unresolvable path is rejected `BAD_PATH`) so a path with no writer can never block the rate-group thread in `open()`. `old_file` and
   `patch_file` are opened `READ_ONLY`; `new_file` is opened `READ_WRITE` (created if absent, preserved otherwise so a
   partial output can be resumed; an output created by a command whose header is then rejected is removed again). If
   an existing `new_file` is larger than the header's `new_size` the command is rejected with `OUTPUT_STALE`; the
@@ -91,7 +92,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   `BAD_OPCODE` even when the delivered bytes matched the chunk CRC.
 * **Path aliasing.** `old_file`, `patch_file` and `new_file` are resolved textually (`Os::FilePathUtils::resolveFromCwd`:
   `.`/`..`/duplicate separators, CWD for relative paths) and must name three distinct paths or the command is rejected
-  `SAME_FILE` before any file is opened. Symbolic links are rejected as non-regular files (above). On POSIX targets
+  `SAME_FILE` before any file is opened; an empty or unresolvable path is rejected `BAD_PATH`. Symbolic links are rejected as non-regular files (above). On POSIX targets
   (`TGT_OS_TYPE_LINUX`/`TGT_OS_TYPE_DARWIN`) the component additionally compares device/inode identity of the
   existing paths, so a hard link to the old image is also `SAME_FILE`; other platforms rely on the textual check and
   the `FileSystem` type check only (FatFs has neither links nor special files).
@@ -105,13 +106,13 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   corrupted, but it also makes the faster group block on the slower one's I/O. Queue sizing: each `run` drains at
   most `MAX_DISPATCH_PER_TICK` commands, so the component's queue depth bounds outstanding commands and the `hook`
   overflow answers `BUSY` beyond it.
-* **Command path sizing.** Command string arguments are deserialised in flight into `Fw::CmdStringArg`
-  (`FW_CMD_STRING_MAX_SIZE`, F Prime default 40), whatever size the FPP declares. `APPLY_PATCH` therefore declares
-  its three path arguments as `string size FW_CMD_STRING_MAX_SIZE`, so the dictionary tells the ground the true
-  limit and an over-long path is rejected at the GDS instead of being silently truncated on board (and then
-  rejected `OPEN_FAILED`, or worse, naming a different file). Events keep `FileNameStringSize`. Deployments with
-  longer update paths raise `FW_CMD_STRING_MAX_SIZE` in their `FpConstants.fpp`; all three arguments must still fit
-  one command packet (`FW_COM_BUFFER_MAX_SIZE`).
+* **Command path sizing.** `APPLY_PATCH` declares its three path arguments as `string size FileNameStringSize`,
+  the same width as the events. F Prime deserialises every command string argument into `Fw::CmdStringArg`
+  (`FW_CMD_STRING_MAX_SIZE`, default 40), whatever size the FPP declares — a known framework limitation — so a path
+  longer than that is truncated on board and then rejected (`OPEN_FAILED`, or `SAME_FILE` if two truncate alike).
+  The three arguments together must also fit one command's argument buffer (`FW_CMD_ARG_BUFFER_MAX_SIZE`). These
+  bounds are an operations constraint: keep update paths short, or raise `FW_CMD_STRING_MAX_SIZE` /
+  `FW_COM_BUFFER_MAX_SIZE` in the deployment's `FpConstants.fpp`.
 
 ### SPatch v2 container
 
@@ -178,6 +179,7 @@ possible without touching the patch payload.
 | `ChunkFailed` | warning high | Chunk (or, with `chunk == ChunksTotal`, final image) failed with `DeltaPatchStatus` |
 | `PatchComplete` | activity high | New image written and verified |
 | `PatchAborted` | activity high | Operator abort |
+| `OutputRemoveFailed` | warning low | An output created for a rejected command could not be removed |
 | `AbortIgnored` | warning low | `ABORT_PATCH` received while not patching |
 
 ## Telemetry
@@ -200,7 +202,7 @@ possible without touching the patch payload.
 | `DELTA_WINDOW_SIZE` | 256 | Decoded op stream window / LZSS history (`DeltaWindow` over `Types::CircularBuffer`) |
 | `DELTA_OUTPUT_BUFFER_SIZE` | 128 | Output staging buffer; also the verification read granularity |
 | `DELTA_OLD_BUFFER_SIZE` | 128 | Old-image read cache serving COPY/ADD operations |
-| `DELTA_MAX_IO_PER_STEP` | 64 | Media reads+writes per `run` tick while patching (a chunk may span ticks) |
+| `DELTA_MAX_IO_PER_STEP` | 64 | Media reads+writes per `run` tick in every phase (a chunk or verify pass may span ticks) |
 | `DELTA_VERIFY_BYTES_PER_STEP` | 4096 | CRC bytes per `run` tick during verification |
 | `DELTA_MAX_CHUNK_BYTES` | 8192 | Largest header `chunk_bytes` accepted; bounds output bytes per `run` tick |
 | `DELTA_MAX_CODED_CHUNK_BYTES` | 16384 | Largest `coded_len` accepted; bounds patch bytes decoded per tick |
@@ -221,13 +223,15 @@ uses `bsdiff4` (BSD-2-Clause) as the matcher (an `hdiffz`/HDiffPatch, MIT, backe
 part of flight code. The tool enforces the same chunk/image caps as `DeltaCodecConfig.hpp` on every entry point
 (`create`, `apply`, `verify`, `info`), applies the flight coders' rule that a trailing LZSS flag byte introducing no
 item is malformed, writes outputs atomically (temporary file + rename), refuses an output path that aliases an
-input, validates the dictionary it reads `FwSizeType` from, and keeps stdout clean for binary output.
+input, validates the dictionary it reads `FwSizeType` from, and writes status text to stderr so stdout carries only
+`info`'s JSON.
 
 ## Unit tests
 
 `test/ut/` covers nominal, busy, open failure, bad header, coder mismatch, old-image mismatch, chunk corruption +
-resume, abort + resume, abort while idle, same-file rejection, and queue overflow. The codec library tests live in
-`FprimeExtras/Update/Delta/test/ut/`.
+resume, abort + resume, abort while idle, same-file rejection (textual and hard link), special-file rejection, no
+output left by a rejected header, output replaced before read-back, and queue overflow. The codec library tests
+(including chunk-transaction, I/O-budget and shrunk-media cases) live in `FprimeExtras/Update/Delta/test/ut/`.
 
 ## Integration tests
 

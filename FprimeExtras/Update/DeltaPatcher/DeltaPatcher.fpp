@@ -17,8 +17,9 @@ module Update {
     @ interleave patch steps (the port is guarded, so concurrent calls serialize rather than corrupt state).
     @
     @ The old image is never modified: old_file, patch_file and new_file must name distinct regular files (new_file may
-    @ also be absent); directories, links and special files are rejected. Command path arguments are limited to
-    @ FW_CMD_STRING_MAX_SIZE characters by the framework; deployments using longer update paths raise that constant.
+    @ also be absent); directories, links and special files are rejected. Path arguments are declared
+    @ FileNameStringSize but are deserialised in flight into FW_CMD_STRING_MAX_SIZE characters (an F Prime limitation),
+    @ and the three together must fit FW_CMD_ARG_BUFFER_MAX_SIZE; operations keeps paths within those bounds.
     @ If the new file already holds a prefix of CRC-verified chunks (e.g. after a reboot), patching resumes at the
     @ first unverified chunk. RAM usage is fixed at construction and the engine never allocates.
     queued component DeltaPatcher {
@@ -34,9 +35,9 @@ module Update {
         @ Start applying patch_file to old_file writing new_file. Resumes if new_file already holds verified chunks.
         @ The command completes (OK or EXECUTION_ERROR) when the patch finishes or fails.
         async command APPLY_PATCH(
-            old_file: string size FW_CMD_STRING_MAX_SIZE @< Existing image (never modified)
-            patch_file: string size FW_CMD_STRING_MAX_SIZE @< Uplinked .spatch file
-            new_file: string size FW_CMD_STRING_MAX_SIZE @< Output image (created or extended)
+            old_file: string size FileNameStringSize @< Existing image (never modified)
+            patch_file: string size FileNameStringSize @< Uplinked .spatch file
+            new_file: string size FileNameStringSize @< Output image (created or extended)
         ) hook
 
         @ Abort an in-progress patch; the partial new_file is retained for later resume
@@ -87,6 +88,11 @@ module Update {
         event PatchAborted(
             chunk: U32 @< Next chunk that would have been applied
         ) severity activity high format "Patch aborted at chunk {}"
+
+        @ An output created for a rejected command could not be removed
+        event OutputRemoveFailed(
+            new_file: string size FileNameStringSize @< New image file
+        ) severity warning low format "Could not remove rejected output {}"
 
         @ ABORT_PATCH was received while no patch was in progress
         event AbortIgnored(

@@ -132,12 +132,7 @@ DeltaMedia::Status DeltaFileMedia::flush() {
     }
     // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it
     if (this->m_readable) {
-        this->m_reader.close();
-        this->m_readable = (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ,
-                                                Os::File::OverwriteType::NO_OVERWRITE) == Os::File::OP_OK);
-        if (!this->m_readable) {
-            return IO_ERROR;
-        }
+        return this->refresh();
     }
     return OP_OK;
 }

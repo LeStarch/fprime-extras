@@ -58,6 +58,9 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Missing input files are rejected OPEN_FAILED
     void openFailed();
 
+    //! An empty path is rejected BAD_PATH with VALIDATION_ERROR before any open
+    void badPath();
+
     //! Corrupt header is rejected BAD_HEADER at command time
     void badHeader();
 

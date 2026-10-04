@@ -92,8 +92,8 @@ bool DeltaPatcher::sameIdentity(const char* first, const char* second) {
     FW_ASSERT(first != nullptr);
     FW_ASSERT(second != nullptr);
 #if defined(DELTA_PATCHER_HAS_FILE_IDENTITY)
-    struct stat firstStat;
-    struct stat secondStat;
+    struct stat firstStat = {};
+    struct stat secondStat = {};
     if ((::stat(first, &firstStat) != 0) || (::stat(second, &secondStat) != 0)) {
         return false;
     }
@@ -125,7 +125,7 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
     const PathCheck check = DeltaPatcher::checkPaths(old_file, patch_file, new_file);
     if (check != PATHS_DISTINCT) {
         const DeltaPatchStatus status =
-            (check == PATHS_ALIASED) ? DeltaPatchStatus::SAME_FILE : DeltaPatchStatus::OPEN_FAILED;
+            (check == PATHS_ALIASED) ? DeltaPatchStatus::SAME_FILE : DeltaPatchStatus::BAD_PATH;
         this->log_WARNING_HI_PatchRejected(status);
         this->tlmWrite_LastStatus(status);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
@@ -154,7 +154,9 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
         this->m_codec.reset();
         if (!newExisted) {
             // A rejected header must not leave an empty output file behind
-            (void)Os::FileSystem::removeFile(new_file.toChar());
+            if (Os::FileSystem::removeFile(new_file.toChar()) != Os::FileSystem::OP_OK) {
+                this->log_WARNING_LO_OutputRemoveFailed(new_file);
+            }
         }
         this->log_WARNING_HI_PatchRejected(DeltaPatcher::toStatus(status));
         this->tlmWrite_LastStatus(DeltaPatcher::toStatus(status));

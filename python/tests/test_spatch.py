@@ -5,7 +5,6 @@ Copyright (c) 2026 Michael Starch
 
 import json
 import os
-import struct
 
 import pytest
 
@@ -193,4 +192,3 @@ def test_corrupt_patch_rejected():
         spatch.apply(OLD, good + b"\x00")
     with pytest.raises(spatch.SPatchError, match="truncated"):
         spatch.apply(OLD, good[:-3])
-    assert struct.calcsize(">Q") == 8

@@ -17,6 +17,8 @@ fprime-extras-spatch apply  old.bin update.spatch out.bin            # reference
 the flight side. The coder must match the coder installed in the flight `DeltaPatcher` (LZSS by default).
 Sizes are serialized as the flight build's `FwSizeType`: pass `--dictionary <deployment dictionary.json>` to read
 its width, or `--size-width 4|8` (default 8); a mismatch is rejected on board with `SIZE_WIDTH_MISMATCH`.
+Status messages (including `verify: OK`/`FAILED`) go to stderr; only `info` writes JSON to stdout. Errors exit 2
+(`verify` mismatch exits 1, interrupt 130). Outputs are written atomically and may not alias an input.
 
 ## Format
 
