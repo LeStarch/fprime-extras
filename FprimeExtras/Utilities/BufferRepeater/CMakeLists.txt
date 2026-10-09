@@ -21,6 +21,7 @@ register_fprime_library(
         "${CMAKE_CURRENT_LIST_DIR}/BufferRepeater.cpp"
    DEPENDS
        FPrimeExtras_FPrimeExtrasConfig
+       FprimeExtras_FprimeExtrasConfig_BufferRepeaterDefaults
 )
 
 ### Unit Tests ###

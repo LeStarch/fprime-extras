@@ -18,7 +18,7 @@ module Utilities {
         array OutputChannelEnables = [BUFFER_FANOUT_MULTI_SIZE] Fw.Enabled
 
         @ Parameter to set which output channels are enabled
-        param CHANNEL_ENABLED: OutputChannelEnables default [Fw.Enabled.ENABLED, Fw.Enabled.ENABLED, Fw.Enabled.ENABLED]
+        param CHANNEL_ENABLED: OutputChannelEnables default BUFFER_REPEATER_DEFAULT_CHANNEL_ENABLE
 
 
         ###############################################################################
