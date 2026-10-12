@@ -68,7 +68,10 @@ def images(request):
 
 @pytest.fixture
 def uplink(request):
-    directory = Path(request.config.getoption("--uplink-dir"))
+    option = request.config.getoption("--uplink-dir")
+    if option is None:
+        pytest.fail("--uplink-dir is required: the directory the deployment's FileUplink accepts")
+    directory = Path(option)
     directory.mkdir(parents=True, exist_ok=True)
     paths = {name: directory / f"variant_{name}" for name in ("old.bin", "u.spatch", "new.bin")}
     for path in paths.values():

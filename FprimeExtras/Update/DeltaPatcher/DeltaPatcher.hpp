@@ -156,6 +156,14 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
                                                        const Update::DeltaAbortRequest& value    //!< The value
                                                        ) override;
 
+    //! Implementation for action reportAbortIgnored of state machine Update_DeltaPatchMachine
+    //!
+    //! Answer an ABORT_PATCH whose patch had already ended when the signal arrived
+    void Update_DeltaPatchMachine_action_reportAbortIgnored(SmId smId,  //!< The state machine id
+                                                            Update_DeltaPatchMachine::Signal signal,  //!< The signal
+                                                            const Update::DeltaAbortRequest& value    //!< The value
+                                                            ) override;
+
     //! Implementation for action doRelease of state machine Update_DeltaPatchMachine
     //!
     //! Close the media and forget the codec progress
@@ -167,6 +175,12 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     // ----------------------------------------------------------------------
     // Implementations for internal state machine guards
     // ----------------------------------------------------------------------
+
+    //! Overflow hook for deltaPatchMachine: a signal found the component queue full of commands
+    void deltaPatchMachine_stateMachineOverflowHook(SmId smId,                    //!< The state machine id
+                                                    FwEnumStoreType signal,       //!< The signal
+                                                    Fw::SerialBufferBase& buffer  //!< The message buffer
+                                                    ) override;
 
     //! Implementation for guard hasOutputToVerify of state machine Update_DeltaPatchMachine
     //!
@@ -195,7 +209,11 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Close all media
     void closeMedia();
 
-    //! True while a patch is bound to the media (APPLY_PATCH accepted and not yet released)
+    //! Whether a patch is bound (output media open)
+    //!
+    //! Signals reach the state machine through the component queue, so within one drain the machine can lag a
+    //! command handler by one dispatch (patch bound, machine still IDLE). This predicate is therefore the only
+    //! lifecycle test the command handlers consult; the machine remains the authority for everything else.
     bool isPatchBound() const;
 
     //! True when the three paths resolve (textually, via Os::FilePathUtils) to three different files
@@ -229,9 +247,9 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
 
     //! The APPLY_PATCH whose response is deferred until the patch completes, fails or is aborted
     struct PendingCommand {
-        FwOpcodeType opCode;  //!< Opcode of the in-progress APPLY_PATCH
-        U32 cmdSeq;           //!< Sequence of the in-progress APPLY_PATCH
-        Fw::String newFile;   //!< Output path, reported on completion
+        FwOpcodeType opCode;       //!< Opcode of the in-progress APPLY_PATCH
+        U32 cmdSeq;                //!< Sequence of the in-progress APPLY_PATCH
+        Fw::CmdStringArg newFile;  //!< Output path, reported on completion
     };
 
     DeltaCoderLzss m_defaultCoder;  //!< Shipped coder, used unless setCoder() is called

@@ -127,6 +127,12 @@ void DeltaPatcherTester ::nominal() {
   ASSERT_TLM_BytesWritten(this->tlmHistory_BytesWritten->size() - 1,
                           NEW_IMAGE_SIZE);
   ASSERT_TLM_ChunksDone(this->tlmHistory_ChunksDone->size() - 1, CHUNK_COUNT);
+  // State channel is update-on-change: the full nominal sequence
+  ASSERT_TLM_State_SIZE(4);
+  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_OLD);
+  ASSERT_TLM_State(1, DeltaPatchState::PATCHING);
+  ASSERT_TLM_State(2, DeltaPatchState::VERIFY_FINAL);
+  ASSERT_TLM_State(3, DeltaPatchState::COMPLETE);
 
   const std::string produced = readFile(this->m_new);
   ASSERT_EQ(produced.size(), NEW_IMAGE_SIZE);
@@ -274,17 +280,41 @@ void DeltaPatcherTester ::chunkFailed() {
   const std::string produced = readFile(this->m_new);
   ASSERT_EQ(produced.size(), NEW_IMAGE_SIZE);
   ASSERT_EQ(0, memcmp(produced.data(), NEW_IMAGE, NEW_IMAGE_SIZE));
+
+  // Abort after completion is ignored and reports the COMPLETE state
+  this->clearHistory();
+  this->sendCmd_ABORT_PATCH(0, 2);
+  this->invoke_to_run(0, 0);
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_ABORT_PATCH, 2,
+                      Fw::CmdResponse::VALIDATION_ERROR);
+  ASSERT_EVENTS_AbortIgnored_SIZE(1);
+  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::COMPLETE);
+
+  // Re-applying after success resumes from COMPLETE through the verify path
+  this->clearHistory();
+  this->apply(3);
+  this->runUntilResponse();
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 3,
+                      Fw::CmdResponse::OK);
+  ASSERT_EVENTS_PatchComplete_SIZE(1);
+  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_NEW);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1,
+                   DeltaPatchState::COMPLETE);
+  ASSERT_EQ(readFile(this->m_new).size(), NEW_IMAGE_SIZE);
 }
 
 void DeltaPatcherTester ::abortAndResume() {
   this->apply(1);
-  // Verify-new, verify-old, then two chunks
+  // apply() already ran one tick (verify-old completes in it: OLD_IMAGE_SIZE
+  // fits one verify step); each further tick applies exactly one chunk
   for (U32 i = 0; i < 4; i++) {
     this->invoke_to_run(0, 0);
   }
   ASSERT_CMD_RESPONSE_SIZE(0);
   const U32 written = this->component.m_codec.chunkIndex();
-  ASSERT_GE(written, 1u);
+  ASSERT_EQ(written, 4u);
 
   this->sendCmd_ABORT_PATCH(0, 2);
   this->invoke_to_run(0, 0);
@@ -308,6 +338,12 @@ void DeltaPatcherTester ::abortAndResume() {
   this->runUntilResponse();
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 3,
                       Fw::CmdResponse::OK);
+  ASSERT_TLM_State_SIZE(5);
+  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_NEW);
+  ASSERT_TLM_State(1, DeltaPatchState::VERIFY_OLD);
+  ASSERT_TLM_State(2, DeltaPatchState::PATCHING);
+  ASSERT_TLM_State(3, DeltaPatchState::VERIFY_FINAL);
+  ASSERT_TLM_State(4, DeltaPatchState::COMPLETE);
   ASSERT_EVENTS_PatchResumed_SIZE(1);
   ASSERT_EVENTS_PatchResumed(0, this->m_new.c_str(), written, CHUNK_COUNT);
   ASSERT_EVENTS_PatchComplete_SIZE(1);
@@ -315,6 +351,110 @@ void DeltaPatcherTester ::abortAndResume() {
   const std::string produced = readFile(this->m_new);
   ASSERT_EQ(produced.size(), NEW_IMAGE_SIZE);
   ASSERT_EQ(0, memcmp(produced.data(), NEW_IMAGE, NEW_IMAGE_SIZE));
+}
+
+void DeltaPatcherTester ::abortDuringVerify() {
+  // ABORT_PATCH queued behind APPLY_PATCH: the abort signal lands in VERIFY_OLD
+  this->sendCmd_APPLY_PATCH(0, 1, Fw::CmdStringArg(this->m_old.c_str()),
+                            Fw::CmdStringArg(this->m_patch.c_str()),
+                            Fw::CmdStringArg(this->m_new.c_str()));
+  this->sendCmd_ABORT_PATCH(0, 2);
+  // A second abort in the same tick finds the patch already ended: answered,
+  // not dropped
+  this->sendCmd_ABORT_PATCH(0, 9);
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchStarted_SIZE(1);
+  ASSERT_EVENTS_PatchAborted_SIZE(1);
+  ASSERT_EVENTS_PatchAborted(0, 0u);
+  ASSERT_EVENTS_PatchComplete_SIZE(0);
+  ASSERT_EVENTS_AbortIgnored_SIZE(1);
+  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::IDLE);
+  ASSERT_CMD_RESPONSE_SIZE(3);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::EXECUTION_ERROR);
+  ASSERT_CMD_RESPONSE(1, DeltaPatcher::OPCODE_ABORT_PATCH, 2,
+                      Fw::CmdResponse::OK);
+  ASSERT_CMD_RESPONSE(2, DeltaPatcher::OPCODE_ABORT_PATCH, 9,
+                      Fw::CmdResponse::VALIDATION_ERROR);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
+  ASSERT_TLM_LastStatus(this->tlmHistory_LastStatus->size() - 1,
+                        DeltaPatchStatus::ABORTED);
+
+  // Abort during final read-back: tick until VERIFY_FINAL, then abort
+  this->clearHistory();
+  this->apply(3);
+  for (U32 i = 0;
+       i < MAX_TICKS &&
+       this->component.deltaPatchMachine_getState() !=
+           DeltaPatcher::Update_DeltaPatchMachine::State::VERIFY_FINAL;
+       i++) {
+    this->invoke_to_run(0, 0);
+  }
+  ASSERT_EQ(this->component.deltaPatchMachine_getState(),
+            DeltaPatcher::Update_DeltaPatchMachine::State::VERIFY_FINAL);
+  ASSERT_CMD_RESPONSE_SIZE(0);
+  this->sendCmd_ABORT_PATCH(0, 4);
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchAborted_SIZE(1);
+  ASSERT_EVENTS_PatchAborted(0, CHUNK_COUNT);
+  ASSERT_EVENTS_PatchComplete_SIZE(0);
+  ASSERT_CMD_RESPONSE_SIZE(2);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 3,
+                      Fw::CmdResponse::EXECUTION_ERROR);
+  ASSERT_CMD_RESPONSE(1, DeltaPatcher::OPCODE_ABORT_PATCH, 4,
+                      Fw::CmdResponse::OK);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
+}
+
+void DeltaPatcherTester ::signalOverflow() {
+  // A bound patch, then ground holds the queue full of ABORT_PATCH: every
+  // signal the drain emits competes with those commands for queue space. The
+  // overflow hook must absorb the loss (no assert) and every command must
+  // still be answered exactly once.
+  this->apply(1);
+  ASSERT_CMD_RESPONSE_SIZE(0);
+  for (U32 seq = 2; seq <= TEST_INSTANCE_QUEUE_DEPTH + 1; seq++) {
+    this->sendCmd_ABORT_PATCH(0, seq);
+  }
+  ASSERT_CMD_RESPONSE_SIZE(0);
+  U32 ticks = 0;
+  for (; ticks < MAX_TICKS &&
+         this->cmdResponseHistory->size() < TEST_INSTANCE_QUEUE_DEPTH + 1;
+       ticks++) {
+    this->invoke_to_run(0, 0);
+  }
+  ASSERT_LT(ticks, static_cast<U32>(MAX_TICKS));
+  ASSERT_CMD_RESPONSE_SIZE(TEST_INSTANCE_QUEUE_DEPTH + 1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::EXECUTION_ERROR);
+  ASSERT_CMD_RESPONSE(1, DeltaPatcher::OPCODE_ABORT_PATCH, 2,
+                      Fw::CmdResponse::OK);
+  U32 ignored = 0;
+  U32 busy = 0;
+  for (U32 i = 2; i < this->cmdResponseHistory->size(); i++) {
+    const CmdResponse &response = this->cmdResponseHistory->at(i);
+    ASSERT_EQ(response.opCode, DeltaPatcher::OPCODE_ABORT_PATCH);
+    if (response.response == Fw::CmdResponse::VALIDATION_ERROR) {
+      ignored++;
+    } else if (response.response == Fw::CmdResponse::BUSY) {
+      busy++;
+    } else {
+      FAIL() << "unexpected abort response " << response.response;
+    }
+  }
+  ASSERT_EQ(ignored + busy, TEST_INSTANCE_QUEUE_DEPTH - 1);
+  ASSERT_EVENTS_PatchAborted_SIZE(1);
+  ASSERT_EVENTS_AbortIgnored_SIZE(ignored);
+  ASSERT_GE(this->eventHistory_SignalDropped->size(), 1u);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
+  // Further ticks are quiet and the patcher accepts a new patch
+  this->clearHistory();
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_SIZE(0);
+  this->apply(20);
+  this->runUntilResponse();
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 20,
+                      Fw::CmdResponse::OK);
 }
 
 void DeltaPatcherTester ::abortIdle() {
@@ -470,13 +610,15 @@ void DeltaPatcherTester ::outputReplacedBeforeVerify() {
   // Tick until every chunk is written but read-back has not begun
   U32 ticks = 0;
   while (ticks < MAX_TICKS &&
-         this->component.deltaPatchMachine_getState() == DeltaPatcher::Update_DeltaPatchMachine::State::PATCHING &&
+         this->component.deltaPatchMachine_getState() ==
+             DeltaPatcher::Update_DeltaPatchMachine::State::PATCHING &&
          this->component.m_codec.chunkIndex() <
              this->component.m_codec.chunkCount()) {
     this->invoke_to_run(0, 0);
     ticks++;
   }
-  ASSERT_EQ(this->component.deltaPatchMachine_getState(), DeltaPatcher::Update_DeltaPatchMachine::State::PATCHING);
+  ASSERT_EQ(this->component.deltaPatchMachine_getState(),
+            DeltaPatcher::Update_DeltaPatchMachine::State::PATCHING);
   ASSERT_EQ(this->component.m_codec.chunkIndex(),
             this->component.m_codec.chunkCount());
   // Replace the output path with a same-sized impostor; the patcher's open

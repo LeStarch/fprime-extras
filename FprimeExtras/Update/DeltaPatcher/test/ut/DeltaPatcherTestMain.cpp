@@ -57,6 +57,16 @@ TEST(OffNominal, ChunkFailed) {
     tester.chunkFailed();
 }
 
+TEST(OffNominal, AbortDuringVerify) {
+    Update::DeltaPatcherTester tester;
+    tester.abortDuringVerify();
+}
+
+TEST(OffNominal, SignalOverflow) {
+    Update::DeltaPatcherTester tester;
+    tester.signalOverflow();
+}
+
 TEST(OffNominal, AbortIdle) {
     Update::DeltaPatcherTester tester;
     tester.abortIdle();

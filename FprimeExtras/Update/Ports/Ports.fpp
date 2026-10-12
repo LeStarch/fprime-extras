@@ -39,7 +39,7 @@ module Update {
     enum DeltaPatchState : U8 {
         IDLE,         @< No patch bound
         PATCHING,     @< Applying chunks
-        FAILED,       @< Last patch failed; output retained for resume
+        FAILED,       @< Last patch failed or was rejected; any partial output is retained for resume
         COMPLETE,     @< Last patch produced and verified the new image
         VERIFY_NEW,   @< Resume: CRC-checking chunks already present in the new image
         VERIFY_OLD,   @< CRC-checking the old image against the header

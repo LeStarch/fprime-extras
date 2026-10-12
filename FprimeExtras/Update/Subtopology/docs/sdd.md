@@ -21,7 +21,9 @@ Configure component properties and worker component:
 
 * **Base ID** — Base identifier for the subtopologies; instance IDs are offset from this base.
 * **Queue sizes** — Depth for `updater`, `worker` and `deltaPatcher` components (`deltaPatcher` must be ≥
-  `DeltaPatcher::MAX_DISPATCH_PER_TICK`; a queue-full command is answered `BUSY` on the caller's thread)
+  `2 * DeltaPatcher::MAX_DISPATCH_PER_TICK`: the DeltaPatchMachine signals share the queue with the commands; a
+  queue-full command is answered `BUSY` on the caller's thread and a queue-full signal is dropped through the
+  state-machine overflow hook and recovered on the next tick)
 * **Stack sizes** — Task stack allocation for `updater` and `worker` components
 * **Priorities** — RTOS priorities for `updater` and `worker` components
 

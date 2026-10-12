@@ -26,7 +26,7 @@ module Update {
     queued component DeltaPatcher {
 
         @ Lifecycle of the patch in progress; its actions delegate the work to the DeltaCodec
-        state machine instance deltaPatchMachine: DeltaPatchMachine
+        state machine instance deltaPatchMachine: DeltaPatchMachine hook
 
         @ Rate-group tick: dispatches queued commands and state-machine signals, then performs one bounded unit of
         @ patch work through the state machine. Mandatory; connect exactly one rate group.
@@ -97,6 +97,11 @@ module Update {
         event AbortIgnored(
             current: DeltaPatchState @< Current patcher state
         ) severity warning low format "ABORT_PATCH ignored: patcher state is {}"
+
+        @ A state-machine signal found the component queue full of commands and was dropped
+        event SignalDropped(
+            signalId: U32 @< DeltaPatchMachine signal id
+        ) severity warning high format "State machine signal {} dropped: queue full"
 
         @ Current patcher state
         telemetry State: DeltaPatchState update on change

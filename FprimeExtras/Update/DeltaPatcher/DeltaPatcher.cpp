@@ -246,6 +246,30 @@ void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAborted(SmId smId,
     this->tlmWrite_State(DeltaPatchState::IDLE);
 }
 
+void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAbortIgnored(SmId smId,
+                                                                       Update_DeltaPatchMachine::Signal signal,
+                                                                       const Update::DeltaAbortRequest& value) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    // The patch ended (an earlier abort, a failure or completion) between command dispatch and signal delivery
+    this->log_WARNING_LO_AbortIgnored(DeltaPatcher::toState(this->deltaPatchMachine_getState()));
+    this->cmdResponse_out(value.get_opCode(), value.get_cmdSeq(), Fw::CmdResponse::VALIDATION_ERROR);
+}
+
+void DeltaPatcher ::deltaPatchMachine_stateMachineOverflowHook(SmId smId,
+                                                               FwEnumStoreType signal,
+                                                               Fw::SerialBufferBase& buffer) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->log_WARNING_HI_SignalDropped(static_cast<U32>(signal));
+    // tick, stageDone and fail are re-derived from the codec on the next tick and reject only refreshes
+    // telemetry; an abort carries a command that must still be answered
+    if (signal == static_cast<FwEnumStoreType>(Update_DeltaPatchMachine::Signal::abort)) {
+        DeltaAbortRequest request;
+        if (buffer.deserializeTo(request) == Fw::FW_SERIALIZE_OK) {
+            this->cmdResponse_out(request.get_opCode(), request.get_cmdSeq(), Fw::CmdResponse::BUSY);
+        }
+    }
+}
+
 void DeltaPatcher ::Update_DeltaPatchMachine_action_doRelease(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
     this->m_codec.reset();

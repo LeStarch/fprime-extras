@@ -17,7 +17,7 @@ def pytest_addoption(parser):
     )
     group.addoption("--chunk-bytes", action="store", type=int, default=4096, help="SPatch chunk size")
     group.addoption(
-        "--uplink-dir", action="store", default="/tmp/uplink", help="Directory FileUplink accepts (shared host)"
+        "--uplink-dir", action="store", default=None, help="Directory the deployment's FileUplink accepts (required; GDS and flight software share the host)"
     )
 
 

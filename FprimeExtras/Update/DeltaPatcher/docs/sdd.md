@@ -21,11 +21,13 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 | DP-011 | The patch lifecycle shall be modeled as an FPP state machine whose actions delegate bounded work to the engine. | `DeltaPatchMachine.fpp`, UT `Nominal`, `AbortAndResume` |
 | DP-012 | Each validator shall document the byte layout it validates. | `DeltaCodec.cpp`, `DeltaCoder*.cpp` |
 | DP-013 | Each shipped coder shall live in its own source files; the interface file shall hold no implementation. | `Delta/CMakeLists.txt` |
-| DP-014 | Flight code shall contain no `while` loops; every loop shall carry an explicit bound. | code inspection, UT `BoundedStep` |
+| DP-014 | Flight code shall contain no `while` loops; every loop shall carry an explicit bound. | code inspection, UT `VerifySpansSteps`, `IoBudgetSpansSteps` |
 | DP-015 | Persistent engine and component state shall be grouped in named structs. | `DeltaCodec.hpp`, `DeltaPatcher.hpp` |
 | DP-016 | The `State` channel shall report the verification stages. | UT `Nominal`, int `test_apply_patch_nominal` |
 | DP-017 | `ABORT_PATCH` shall be answered after the abort has taken effect, following the aborted `APPLY_PATCH` response. | UT `AbortAndResume` |
-| DP-018 | All three shipped coders shall be exercised on real deployment images. | int `test_ref_variants.py` |
+| DP-018 | All three shipped coders shall be exercised on real deployment images. | int `test_ref_variants.py` | The coder is fixed per deployment (`setCoder`), so the campaign is run once per coder
+  against a deployment built with that coder; a coder the deployment does not install is reported `CODER_MISMATCH`
+  and that case is skipped.
 | DP-010 | `ABORT_PATCH` shall stop patching and retain the partial output for resume. | UT `AbortAndResume` |
 
 ## Design
@@ -34,7 +36,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
             APPLY_PATCH / ABORT_PATCH (async, queued)
                           |
  rateGroup ---> run ----> DeltaPatcher ----> patchComplete (optional)
-                            |  DeltaCodec (streaming engine, 3 x 256 B buffers)
+                            |  DeltaCodec (streaming engine, 4 buffers, 640 B )
                             |    DeltaCoder (LZSS default | RLE | None | project)
                             |    DeltaMedia x3 (Os::File; flash region later)
 ```
@@ -73,10 +75,20 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 * **Coders.** `DeltaCoder.hpp` is the pure interface; the shipped implementations live one per file:
   `DeltaCoderNone`, `DeltaCoderRle`, `DeltaCoderLzss` (`.hpp`/`.cpp`), each holding its partial-token state in a
   `Token` struct and documenting its payload layout at the top of `decode()`.
+* **Completion order.** `VERIFY_FINAL --stageDone-->` runs `doRelease` before `reportComplete`, so
+  `patchComplete` is invoked (and `PatchComplete` logged) only after the output file is closed; a consumer may open
+  it immediately.
 * **Queued component.** `run_handler` drains at most `MAX_DISPATCH_PER_TICK` queued messages (commands and signals
   left from the previous tick), sends `tick`, and drains again so the tick's work and the transition it produces
-  complete within the same tick; the instance queue (`UpdateConfig.QueueSizes.deltaPatcher`, 8) is sized for
-  `2 * MAX_DISPATCH_PER_TICK` so a burst of commands cannot leave the state-machine signals without room. A tick
+  complete within the same tick; the instance queue (`UpdateConfig.QueueSizes.deltaPatcher`, 8) holds
+  `2 * MAX_DISPATCH_PER_TICK` messages. Ground can nevertheless hold the queue full of commands (the command
+  overflow hooks shed with `BUSY` only once it is full), so the state-machine instance uses the `hook` overflow
+  policy instead of the autocoder's default assert: a signal that finds the queue full is dropped with a
+  `SignalDropped` warning. Every dropped signal is recoverable: `tick`, `stageDone` and `fail` are re-derived
+  from the codec on the next tick (each stage function is idempotent once its stage has finished or failed),
+  `reject` only refreshes telemetry, and a dropped `abort` is answered `BUSY` from the hook so no `ABORT_PATCH` is
+  orphaned. An `abort` delivered after the patch has already ended (a second abort in the same tick, or a failure
+  that overtook it) is answered `VALIDATION_ERROR` with `AbortIgnored` by the resting states. A tick
   verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
   with `BAD_HEADER`/`BAD_OPCODE`. Because a coder may expand its input (LZSS up to 129:1), the decoded operation
@@ -105,7 +117,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   bytes exhausted, operation stream drained, window empty, coder not `pending()`) and the chunk CRC matches. Only
   then is the slice written and the media flushed. A rejected chunk therefore never exists on the media as a
   complete, CRC-valid chunk; the committed prefix is exactly the chunks that passed.
-* **Resume.** On `begin()`, the codec walks the existing `new_file` chunk-by-chunk, comparing the CRC of each
+* **Resume.** In `VERIFY_NEW` (`verifyNew()`, one bounded slice per tick), the codec walks the existing `new_file` chunk-by-chunk, comparing the CRC of each
   prefix chunk to the CRC stored in the patch. Patching restarts at the first chunk that does not verify. No coder
   state is persisted because each chunk is coded independently. `PatchResumed(chunk)` reports the restart point.
   Skipped chunks are trusted on CRC alone (they are not re-decoded); CRC32 detects accidental corruption, not a
@@ -117,8 +129,8 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   `VERIFY_FINAL`, re-reading the stored image in `DELTA_VERIFY_BYTES_PER_STEP` slices and
   comparing size and CRC to the header (`NEW_IMAGE_MISMATCH` otherwise). `COMPLETE` therefore attests to the bytes
   on the media, not to the bytes handed to it; a project flash-region `DeltaMedia` gets write-then-verify for free.
-* **Command completion.** `APPLY_PATCH` responds when the codec reaches `COMPLETE` (OK) or `FAILED`
-  (EXECUTION_ERROR). Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
+* **Command completion.** `APPLY_PATCH` is answered by the state machine's `reportComplete` (OK) or `reportFailed`
+  (`EXECUTION_ERROR`) action, i.e. on the transition into `COMPLETE` or `FAILED`. Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
   failures, old-image *size* mismatch, `OUTPUT_STALE`) respond at once with `PatchRejected`. Failures detected while
   stepping (old-image *CRC* mismatch → `OldImageMismatch`; resume-verification, chunk, or final-image errors →
   `ChunkFailed`) complete the deferred command with EXECUTION_ERROR. For final-image errors (`PATCH_SIZE_MISMATCH`,
@@ -146,9 +158,8 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 * **Scheduling.** `run` is a `guarded` input: exactly one rate group must drive it. Connecting `run` is mandatory
   (commands are queued and never dispatched otherwise, and `Svc::CmdDispatcher` then accumulates unanswered
   entries). Driving `run` from two rate groups is not supported — the guard serialises the calls so state cannot be
-  corrupted, but it also makes the faster group block on the slower one's I/O. Queue sizing: each `run` drains at
-  most `MAX_DISPATCH_PER_TICK` commands, so the component's queue depth bounds outstanding commands and the `hook`
-  overflow answers `BUSY` beyond it.
+  corrupted, but it also makes the faster group block on the slower one's I/O. Queue sizing and the overflow policy for commands and
+  state-machine signals are given under *Queued component* above.
 * **Command path sizing.** Command string arguments are deserialised in flight into `Fw::CmdStringArg`
   (`FW_CMD_STRING_MAX_SIZE`, F Prime default 40), whatever size the FPP declares. `APPLY_PATCH` therefore declares
   its three path arguments as `string size FW_CMD_STRING_MAX_SIZE`, so the dictionary tells the ground the true
@@ -189,7 +200,7 @@ followed by `COPY`/`ADD`/`LIT` (two consecutive `SEEK`s are `BAD_OPCODE`); a chu
 `DELTA_MAX_OPS_PER_CHUNK` operations. The old cursor resets to
 `chunk_index * chunk_bytes` at each chunk start so chunks are independent.
 
-Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `Delta/DeltaCoder.hpp`).
+Coder ids: `0` none, `1` RLE, `2` LZSS (256-byte window, original format; see `Delta/DeltaCoderLzss.hpp`).
 
 The chunk count and each chunk's raw length are derived from `new_size` and `chunk_bytes` rather than carried in
 the file, and the per-chunk CRC covers the *decoded output* rather than the coded payload: a corrupted payload
@@ -255,7 +266,8 @@ possible without touching the patch payload.
 or an operation, a window smaller than the LZSS history, zero verification progress, an I/O budget below one
 operation, caps that cannot admit a valid chunk).
 
-RAM (measured, x86-64, 64-bit `FwSizeType`): `DeltaCodec` 984 B + `DeltaCoderLzss` 32 B = 1016 B. `Os::File` handles inside
+RAM (measured, x86-64, 64-bit `FwSizeType`): `DeltaCodec` 976 B + `DeltaCoderLzss` 32 B = 1008 B
+(`DeltaCoderRle` 24 B, `DeltaCoderNone` 8 B). `Os::File` handles inside
 `DeltaFileMedia` are platform-owned and outside this budget.
 
 ## Ground tooling
@@ -279,6 +291,15 @@ resume, abort + resume, abort while idle, same-file rejection, and queue overflo
 rate group to `deltaPatcher.run`, and lets FileUplink write to `/tmp/uplink` (GDS and FSW on the same host). It
 needs `fprime-gds` and `pip install ./python`, and resolves the instance through the integration-config key
 `Update.DeltaPatcher`:
+
+`test/int/test_ref_variants.py` is the DP-018 campaign: it builds an SPatch between two real deployment images
+with the ground tool for each requested coder, applies it on the deployment through `APPLY_PATCH`, and compares the
+produced file byte-for-byte with the target image. Options (`test/int/conftest.py`): `--old-image`, `--new-image`
+(the two built images, e.g. a Ref with a component added, removed or reconfigured), `--coders` (comma list of
+`none`, `rle`, `lzss`), `--chunk-bytes`, and `--uplink-dir` (required: the directory the deployment's FileUplink
+accepts; the images are placed there directly because GDS and flight software share the host). The coder is fixed
+per deployment, so the campaign is run once per coder against a deployment built with that coder; a coder the
+deployment does not install is answered `PatchRejected(CODER_MISMATCH)` and that case is skipped.
 
     pytest FprimeExtras/Update/DeltaPatcher/test/int --dictionary <deployment>/dict/<Topology>TopologyDictionary.json \
         --deployment-config <deployment>/test/int/int_config.json

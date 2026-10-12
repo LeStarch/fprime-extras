@@ -83,6 +83,9 @@ module Update {
         @ Emit PatchAborted, answer APPLY_PATCH EXECUTION_ERROR and ABORT_PATCH OK, report IDLE
         action reportAborted: DeltaAbortRequest
 
+        @ Answer an ABORT_PATCH whose patch had already ended when the signal arrived
+        action reportAbortIgnored: DeltaAbortRequest
+
         @ Close the media and forget the codec progress
         action doRelease
 
@@ -90,6 +93,7 @@ module Update {
         state IDLE {
             on start enter selectResume
             on reject enter FAILED
+            on abort do { reportAbortIgnored }
         }
 
         @ Resume only when the existing output holds whole chunks worth checking
@@ -128,16 +132,17 @@ module Update {
         state VERIFY_FINAL {
             entry do { tlmVerifyFinal }
             on tick do { doVerifyFinal }
-            on stageDone do { reportComplete } enter COMPLETE
+            on stageDone do { doRelease, reportComplete } enter COMPLETE
             on fail do { reportFailed } enter FAILED
             on abort do { reportAborted, doRelease } enter IDLE
         }
 
         @ New image produced and verified
         state COMPLETE {
-            entry do { doRelease, tlmComplete }
+            entry do { tlmComplete }
             on start enter selectResume
             on reject enter FAILED
+            on abort do { reportAbortIgnored }
         }
 
         @ Patch failed; the output is retained for resume
@@ -145,6 +150,7 @@ module Update {
             entry do { doRelease, tlmFailed }
             on start enter selectResume
             on reject enter FAILED
+            on abort do { reportAbortIgnored }
         }
     }
 }

@@ -1084,7 +1084,9 @@ TEST(DeltaCodec, MediaErrors) {
     EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR);
     EXPECT_EQ(codec.state(), TestCodec::FAILED);
     EXPECT_EQ(codec.lastStatus(), DeltaCodec::READ_ERROR);
-    EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR); // stays failed
+    // A failed engine stays failed: a further verify step is still rejected
+    DeltaCodec::StepResult stepResult = DeltaCodec::IN_PROGRESS;
+    EXPECT_EQ(codec.codec.verifyOld(stepResult), DeltaCodec::READ_ERROR);
   }
   {
     MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
@@ -1171,7 +1173,7 @@ TEST(DeltaCodec, ResetReturnsToIdle) {
   codec.reset();
   EXPECT_EQ(codec.state(), TestCodec::IDLE);
   EXPECT_EQ(codec.chunkIndex(), 0u);
-  EXPECT_EQ(codec.step(), DeltaCodec::OP_OK); // no-op when idle
+  EXPECT_FALSE(codec.codec.hasOutputToVerify());
 }
 
 // ----------------------------------------------------------------------

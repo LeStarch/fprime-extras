@@ -79,6 +79,12 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! ABORT_PATCH when idle is a validation error
     void abortIdle();
 
+    //! Abort while in VERIFY_OLD and VERIFY_FINAL
+    void abortDuringVerify();
+
+    //! Queue held full of ABORT_PATCH while bound: hook absorbs dropped signals
+    void signalOverflow();
+
     //! Queue-full commands are answered BUSY immediately via the overflow hook
     void queueOverflow();
 
