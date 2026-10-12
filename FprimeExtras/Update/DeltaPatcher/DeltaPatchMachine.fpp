@@ -34,7 +34,7 @@ module Update {
         @ Operator ABORT_PATCH, carrying the command to answer once the abort has taken effect
         signal abort: DeltaAbortRequest
 
-        @ APPLY_PATCH rejected after the files were opened (open or header failure); nothing is bound
+        @ APPLY_PATCH rejected once the handler has tried to open the files (open or header failure); nothing is bound
         signal reject
 
         @ True when the existing new file holds whole chunks to CRC-verify before patching (resume)

@@ -85,7 +85,8 @@ DeltaCodec::Status DeltaCodec::begin(DeltaMedia& oldImage, DeltaMedia& patch, De
         return OLD_IMAGE_MISMATCH;
     }
 
-    // Resume: whole chunks already present in the output are verified before patching continues
+    // Resume: whole chunks already present in the output are verified before
+    // patching continues
     FwSizeType newSize = 0;
     if (newImage.size(newSize) != DeltaMedia::OP_OK) {
         return READ_ERROR;
@@ -110,7 +111,8 @@ FwSizeType DeltaCodec::bytesWritten() const {
 // Header validation
 // ----------------------------------------------------------------------
 
-// SPatch header layout (W = sizeof(FwSizeType), recorded in the header; all integers big-endian)
+// SPatch header layout (W = sizeof(FwSizeType), recorded in the header; all
+// integers big-endian)
 //
 //     offset      size  field
 //     0            4    magic "SPAT"
@@ -126,15 +128,17 @@ FwSizeType DeltaCodec::bytesWritten() const {
 //     16 + 3W      4    header_crc32   over bytes [0, 16 + 3W)
 //     20 + 3W           total: 32 B at W = 4, 44 B at W = 8
 //
-// Validated in this order: magic/version/flags, size_width (the layout depends on it), length, header CRC,
-// coder id (an intact header naming another coder is a configuration disagreement, not corruption), geometry caps.
+// Validated in this order: magic/version/flags, size_width (the layout depends
+// on it), length, header CRC, coder id (an intact header naming another coder
+// is a configuration disagreement, not corruption), geometry caps.
 DeltaCodec::Status DeltaCodec::readHeader(DeltaMedia& patch) {
     static_assert(DELTA_PATCH_BUFFER_SIZE >= HEADER_SIZE, "Patch buffer must hold the SPatch header");
     if (patch.size(this->m_header.patchSize) != DeltaMedia::OP_OK) {
         return READ_ERROR;
     }
-    // The fixed prefix (magic, version, coder, flags, size width) is validated before the width-dependent remainder
-    // so that a short patch from the other width is still reported as SIZE_WIDTH_MISMATCH
+    // The fixed prefix (magic, version, coder, flags, size width) is validated
+    // before the width-dependent remainder so that a short patch from the other
+    // width is still reported as SIZE_WIDTH_MISMATCH
     const FwSizeType prefixLength = (this->m_header.patchSize < HEADER_SIZE) ? this->m_header.patchSize : HEADER_SIZE;
     if (prefixLength < HDR_OLD_SIZE) {
         return TRUNCATED;
@@ -184,14 +188,17 @@ DeltaCodec::Status DeltaCodec::readHeader(DeltaMedia& patch) {
     return OP_OK;
 }
 
-// Chunk header layout (W = sizeof(FwSizeType), big-endian), one per chunk, ceil(new_size / chunk_bytes) chunks
+// Chunk header layout (W = sizeof(FwSizeType), big-endian), one per chunk,
+// ceil(new_size / chunk_bytes) chunks
 //
 //     offset   size        field
-//     0        W           coded_len      payload bytes that follow (0 .. DELTA_MAX_CODED_CHUNK_BYTES)
-//     W        4           output_crc32   CRC32 of the chunk's decoded output, not of the payload
-//     W + 4    coded_len   payload        coder stream decoding to the operation stream (see parseOp())
+//     0        W           coded_len      payload bytes that follow (0 ..
+//     DELTA_MAX_CODED_CHUNK_BYTES) W        4           output_crc32   CRC32 of
+//     the chunk's decoded output, not of the payload W + 4    coded_len payload
+//     coder stream decoding to the operation stream (see parseOp())
 //
-// The chunk's raw output length is not carried: it is min(chunk_bytes, new_size - index * chunk_bytes).
+// The chunk's raw output length is not carried: it is min(chunk_bytes, new_size
+// - index * chunk_bytes).
 DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc) {
     const Progress& progress = this->m_progress;
     FW_ASSERT(progress.patchPos <= this->m_header.patchSize, static_cast<FwAssertArgType>(progress.patchPos));
@@ -210,7 +217,8 @@ DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc
     if (codedLength > DELTA_MAX_CODED_CHUNK_BYTES) {
         return BAD_OPCODE;
     }
-    // Subtraction form: patchPos + CHUNK_HEADER_SIZE <= patchSize was established above, so this cannot wrap
+    // Subtraction form: patchPos + CHUNK_HEADER_SIZE <= patchSize was established
+    // above, so this cannot wrap
     if (codedLength > this->m_header.patchSize - (progress.patchPos + CHUNK_HEADER_SIZE)) {
         return TRUNCATED;
     }
@@ -254,7 +262,8 @@ DeltaCodec::Status DeltaCodec::verifyNew(StepResult& result) {
     Progress& progress = this->m_progress;
     const Header& header = this->m_header;
     FwSizeType budget = DELTA_VERIFY_BYTES_PER_STEP;
-    for (FwSizeType pass = 0; pass < MAX_VERIFY_PASSES && budget > 0 && progress.chunkIndex < progress.verifyChunks;
+    for (FwSizeType pass = 0; pass < MAX_VERIFY_PASSES && budget > 0 && this->m_ioCount < DELTA_MAX_IO_PER_STEP &&
+                              progress.chunkIndex < progress.verifyChunks;
          pass++) {
         const FwSizeType chunkStart = progress.chunkIndex * header.chunkBytes;
         const FwSizeType chunkLength =
@@ -262,7 +271,8 @@ DeltaCodec::Status DeltaCodec::verifyNew(StepResult& result) {
         const U32 crcBefore = progress.runningCrc;
         const FwSizeType offsetBefore = this->m_verify.offset;
         if (this->verifySlice(*this->m_new, chunkStart, chunkLength, budget) != OP_OK) {
-            // The existing output cannot be read here (e.g. it shrank underneath us): patch from this chunk on
+            // The existing output cannot be read here (e.g. it shrank underneath us):
+            // patch from this chunk on
             progress.runningCrc = progress.committedCrc;
             progress.verifyChunks = progress.chunkIndex;
             break;
@@ -273,7 +283,8 @@ DeltaCodec::Status DeltaCodec::verifyNew(StepResult& result) {
             U32 expectedCrc = 0;
             const Status status = this->readChunkHeader(codedLength, expectedCrc);
             if (status != OP_OK) {
-                // Leave the span reset so a re-entered stage re-verifies this chunk instead of over-running it
+                // Leave the span reset so a re-entered stage re-verifies this chunk
+                // instead of over-running it
                 this->m_verify.offset = 0;
                 this->m_verify.crc = crcInit();
                 return status;
@@ -313,7 +324,8 @@ DeltaCodec::Status DeltaCodec::verifyOld(StepResult& result) {
         }
     }
     if (this->m_verify.offset >= header.oldSize) {
-        // The span CRC stays un-finalized so a repeated call (a dropped stageDone) gives the same answer
+        // The span CRC stays un-finalized so a repeated call (a dropped stageDone)
+        // gives the same answer
         if (crcFinal(this->m_verify.crc) != header.oldCrc) {
             return OLD_IMAGE_MISMATCH;
         }
@@ -356,7 +368,8 @@ DeltaCodec::Status DeltaCodec::patchChunk(StepResult& result) {
     result = IN_PROGRESS;
     this->m_ioCount = 0;
     if (this->m_progress.finished) {
-        // A repeated call after completion (dropped stageDone) must not re-run the read-back refresh
+        // A repeated call after completion (dropped stageDone) must not re-run the
+        // read-back refresh
         result = STAGE_DONE;
         return OP_OK;
     }
@@ -380,7 +393,8 @@ DeltaCodec::Status DeltaCodec::patchChunk(StepResult& result) {
             return this->failChunk(status);
         }
         if (this->m_ioCount >= DELTA_MAX_IO_PER_STEP) {
-            // Budget spent: the chunk (and the unwritten tail of its output) carries over to the next tick
+            // Budget spent: the chunk (and the unwritten tail of its output) carries
+            // over to the next tick
             return OP_OK;
         }
     }
@@ -408,7 +422,8 @@ DeltaCodec::Status DeltaCodec::finishImage(StepResult& result) {
     if (crcFinal(this->m_progress.committedCrc) != this->m_header.newCrc) {
         return NEW_IMAGE_MISMATCH;
     }
-    // The CRC above covers what was handed to the media; completion requires the stored bytes to agree
+    // The CRC above covers what was handed to the media; completion requires the
+    // stored bytes to agree
     if (this->m_new->flush() != DeltaMedia::OP_OK) {
         return WRITE_ERROR;
     }
@@ -475,7 +490,8 @@ DeltaCodec::Status DeltaCodec::finishChunk() {
     if (status != OP_OK) {
         return status;
     }
-    // One media flush per chunk boundary (not per write) keeps the tick's I/O time bounded
+    // One media flush per chunk boundary (not per write) keeps the tick's I/O
+    // time bounded
     if (this->m_new->flush() != DeltaMedia::OP_OK) {
         return WRITE_ERROR;
     }
@@ -487,7 +503,8 @@ DeltaCodec::Status DeltaCodec::finishChunk() {
 }
 
 DeltaCodec::Status DeltaCodec::fillWindow(Chunk& chunk) {
-    // Each pass pushes at least one byte or returns, so the free window space bounds the passes
+    // Each pass pushes at least one byte or returns, so the free window space
+    // bounds the passes
     const FwSizeType maxPasses = this->m_window.space();
     for (FwSizeType pass = 0; pass < maxPasses && this->m_window.space() > 0; pass++) {
         if (chunk.patchPos >= chunk.patchFill && chunk.codedRemaining > 0) {
@@ -503,7 +520,8 @@ DeltaCodec::Status DeltaCodec::fillWindow(Chunk& chunk) {
             chunk.patchFill = length;
             chunk.patchPos = 0;
         }
-        // Called even with no input left so a coder may drain pending output (e.g. an in-progress match)
+        // Called even with no input left so a coder may drain pending output (e.g.
+        // an in-progress match)
         FwSizeType consumed = 0;
         const FwSizeType before = this->m_window.count();
         const FwSizeType available = chunk.patchFill - chunk.patchPos;
@@ -515,17 +533,20 @@ DeltaCodec::Status DeltaCodec::fillWindow(Chunk& chunk) {
         FW_ASSERT(consumed <= available, static_cast<FwAssertArgType>(consumed));
         chunk.patchPos += consumed;
         if (consumed == 0 && this->m_window.count() == before) {
-            // No progress: either input is exhausted (caller decides) or the coder is stuck on input it has
+            // No progress: either input is exhausted (caller decides) or the coder is
+            // stuck on input it has
             return (available == 0) ? OP_OK : BAD_OPCODE;
         }
     }
     return OP_OK;
 }
 
-// Varint layout: unsigned LEB128, 7 payload bits per byte, least significant group first, at most 5 bytes
+// Varint layout: unsigned LEB128, 7 payload bits per byte, least significant
+// group first, at most 5 bytes
 //
 //     +---------------+---------------+-----+---------------+
-//     | 1 b6..b0      | 1 b13..b7     | ... | 0 b34..b28    |     continuation bit set on all but the last byte
+//     | 1 b6..b0      | 1 b13..b7     | ... | 0 b34..b28    |     continuation
+//     bit set on all but the last byte
 //     +---------------+---------------+-----+---------------+
 DeltaCodec::VarintResult DeltaCodec::readVarint(FwSizeType start, U64& value, FwSizeType& length) const {
     value = 0;
@@ -544,25 +565,29 @@ DeltaCodec::VarintResult DeltaCodec::readVarint(FwSizeType start, U64& value, Fw
     return VARINT_INVALID;
 }
 
-// Operation layout (the decoded chunk payload is a sequence of these; o = new-image offset, c = old cursor,
-// c starts at the chunk's new-image offset)
+// Operation layout (the decoded chunk payload is a sequence of these; o =
+// new-image offset, c = old cursor, c starts at the chunk's new-image offset)
 //
 //     +--------+------------------+----------------+
 //     | op U8  | operand varint   | data           |
 //     +--------+------------------+----------------+
-//     COPY 0x00  n (uvar, n > 0)   -                 new[o:o+n] = old[c:c+n];           c += n
-//     ADD  0x01  n (uvar, n > 0)   n bytes d[]       new[o+i]   = old[c+i] + d[i] mod 256; c += n
-//     LIT  0x02  n (uvar, n > 0)   n bytes           new[o:o+n] = bytes
-//     SEEK 0x03  d (zigzag svar)   -                 c += d, 0 <= c <= old_size; must be followed by COPY/ADD/LIT
+//     COPY 0x00  n (uvar, n > 0)   -                 new[o:o+n] = old[c:c+n];
+//     c += n ADD  0x01  n (uvar, n > 0)   n bytes d[]       new[o+i]   =
+//     old[c+i] + d[i] mod 256; c += n LIT  0x02  n (uvar, n > 0)   n bytes
+//     new[o:o+n] = bytes SEEK 0x03  d (zigzag svar)   -                 c += d,
+//     0 <= c <= old_size; must be followed by COPY/ADD/LIT
 //
-// n may not exceed the chunk's remaining output; operations never span a chunk boundary; at most
-// DELTA_MAX_OPS_PER_CHUNK operations per chunk. The data bytes of ADD/LIT are consumed by executeOp().
+// n may not exceed the chunk's remaining output; operations never span a chunk
+// boundary; at most DELTA_MAX_OPS_PER_CHUNK operations per chunk. The data
+// bytes of ADD/LIT are consumed by executeOp().
 DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
-    // Ensure the op byte and complete operand are decoded; the window holds at least 6 bytes so this always fits
+    // Ensure the op byte and complete operand are decoded; the window holds at
+    // least 6 bytes so this always fits
     static_assert(DELTA_WINDOW_SIZE > VARINT_MAX_BYTES, "Window must hold an op byte and its operand");
     U64 operand = 0;
     FwSizeType operandLength = 0;
-    // Each pass adds at least one window byte or returns; an op byte plus operand needs at most 1 + VARINT_MAX_BYTES
+    // Each pass adds at least one window byte or returns; an op byte plus operand
+    // needs at most 1 + VARINT_MAX_BYTES
     VarintResult result = VARINT_NEED_MORE;
     for (FwSizeType pass = 0; pass <= 1 + VARINT_MAX_BYTES && result == VARINT_NEED_MORE; pass++) {
         if (this->m_window.count() >= 1) {
@@ -586,7 +611,8 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
     }
     const U8 opByte = this->m_window.peek(0);
     this->m_window.pop(1 + operandLength);
-    // Explicit work bound: every producing op emits at least one byte and at most one SEEK precedes it
+    // Explicit work bound: every producing op emits at least one byte and at most
+    // one SEEK precedes it
     chunk.opCount++;
     if (chunk.opCount > DELTA_MAX_OPS_PER_CHUNK) {
         return BAD_OPCODE;
@@ -594,8 +620,9 @@ DeltaCodec::Status DeltaCodec::parseOp(Chunk& chunk) {
 
     switch (opByte) {
         case OP_SEEK: {
-            // A SEEK is only meaningful before a producing op; consecutive SEEKs let a patch burn a whole coded
-            // chunk (expanded by the coder) without producing output, defeating the per-step work bound
+            // A SEEK is only meaningful before a producing op; consecutive SEEKs let a
+            // patch burn a whole coded chunk (expanded by the coder) without producing
+            // output, defeating the per-step work bound
             if (chunk.seekPending) {
                 return BAD_OPCODE;
             }
@@ -667,7 +694,8 @@ DeltaCodec::Status DeltaCodec::executeOp(Chunk& chunk) {
     if (chunk.opRemaining == 0) {
         chunk.opActive = false;
     }
-    // The final slice of a chunk is held back until finishChunk() has validated the whole chunk
+    // The final slice of a chunk is held back until finishChunk() has validated
+    // the whole chunk
     if (chunk.outFill == DELTA_OUTPUT_BUFFER_SIZE && chunk.produced < chunk.expected) {
         return this->flushOutput(chunk);
     }
@@ -691,7 +719,8 @@ DeltaCodec::Status DeltaCodec::readOld(FwSizeType offset, U8* out, FwSizeType& l
         cache.offset = offset;
         cache.length = fill;
     }
-    // Serve what the cache holds from `offset`; the caller re-enters for any remainder
+    // Serve what the cache holds from `offset`; the caller re-enters for any
+    // remainder
     const FwSizeType start = offset - cache.offset;
     const FwSizeType inCache = cache.length - start;
     length = (length < inCache) ? length : inCache;

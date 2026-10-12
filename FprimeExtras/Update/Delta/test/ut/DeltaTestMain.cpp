@@ -1109,6 +1109,20 @@ TEST(DeltaCodec, StagesIdempotentAfterDone) {
   result = DeltaCodec::IN_PROGRESS;
   EXPECT_EQ(codec.codec.verifyFinal(result), DeltaCodec::OP_OK);
   EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
+
+  // Resume over the finished output: verifyNew is the stage that runs, and
+  // it too must report STAGE_DONE again when re-called
+  ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+  ASSERT_TRUE(codec.codec.hasOutputToVerify());
+  result = DeltaCodec::IN_PROGRESS;
+  for (U32 i = 0; i < MAX_CALLS && result != DeltaCodec::STAGE_DONE; i++) {
+    ASSERT_EQ(codec.codec.verifyNew(result), DeltaCodec::OP_OK);
+  }
+  ASSERT_EQ(result, DeltaCodec::STAGE_DONE);
+  result = DeltaCodec::IN_PROGRESS;
+  EXPECT_EQ(codec.codec.verifyNew(result), DeltaCodec::OP_OK);
+  EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
+  EXPECT_EQ(codec.codec.resumedChunks(), codec.codec.chunkCount());
 }
 
 TEST(DeltaCodec, MediaErrors) {

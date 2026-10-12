@@ -60,7 +60,9 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   resets the engine. The component therefore keeps no lifecycle state of its own: "busy" is "media bound"
   (`isPatchBound()`), and the only other persistent member is the `PendingCommand` struct holding the deferred
   `APPLY_PATCH` response. `APPLY_PATCH` validates paths, opens media and runs `DeltaCodec::begin()` in the command handler, i.e. on the
-  thread that calls `run`; failures there are answered immediately (`PatchRejected`) and `reject` moves the machine to FAILED.
+  thread that calls `run`; failures once the handler has tried to open the files are answered immediately (`PatchRejected`) and `reject`
+  moves the machine to FAILED; `BUSY` and path-check rejections (`SAME_FILE`, an unresolvable path) are answered
+  without a signal and leave the machine and `State` unchanged.
 * **Delegate (engine).** `DeltaCodec` owns no lifecycle either: its public surface is `begin()`,
   `hasOutputToVerify()`, `verifyNew()`, `verifyOld()`, `patchChunk()`, `verifyFinal()` and `reset()`, each stage call
   doing one bounded unit of work and reporting `IN_PROGRESS` or `STAGE_DONE`. Its state is five structs — `Header`
@@ -85,8 +87,12 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   policy instead of the autocoder's default assert: a signal that finds the queue full is dropped with a
   `SignalDropped` warning. Every dropped signal is recoverable: `tick`, `stageDone` and `fail` are re-derived
   from the codec on the next tick (each stage function is idempotent once its stage has finished or failed),
-  `reject` only refreshes telemetry, a dropped `start` makes the hook unbind the patch and answer its `APPLY_PATCH` `BUSY`, and a dropped `abort`
-  is answered `BUSY` from the hook so no command is orphaned. An `abort` delivered after the patch has already ended (a second abort in the same tick, or a failure
+  `reject` only refreshes telemetry, a dropped `start` makes the hook unbind the patch and answer its `APPLY_PATCH` `BUSY` (`SignalDropped(start)` is
+  the trace; no second `PatchRejected`), and a dropped `abort`
+  is answered `BUSY` from the hook so no command is orphaned. While ground sustains more than
+  `MAX_DISPATCH_PER_TICK` commands per tick, every `tick` is dropped and the patch makes no progress until the flood
+  ends (each excess command is answered `BUSY`); `init()` asserts the instance queue holds at least
+  `2 * MAX_DISPATCH_PER_TICK` messages so a correctly sized deployment recovers on the first quiet tick. An `abort` delivered after the patch has already ended (a second abort in the same tick, or a failure
   that overtook it) is answered `VALIDATION_ERROR` with `AbortIgnored` by the resting states. A tick
   verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
@@ -101,7 +107,10 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   before read-back, never per write); drive `run` from a slow, non-critical rate group. Both commands use the FPP `hook` overflow
   policy: a command arriving on a full queue is answered `BUSY` immediately on the caller's thread (`APPLY_PATCH`
   also emits `PatchRejected(BUSY)`), so `Svc::CmdDispatcher` never waits on a lost response.
-* **Media.** `old_file`, `patch_file` and `new_file` must be distinct (see *Path aliasing*). Before any open,
+* **Media.** A patch is "bound" while the old-image medium is open (`isPatchBound()`; the old image is the one
+  medium the codec never re-resolves mid-stage). A `start` signal dropped by the overflow hook unbinds immediately and
+  may leave a zero-length `new_file` behind (harmless to a later resume). `old_file`, `patch_file` and `new_file` must
+  be distinct (see *Path aliasing*). Before any open,
   `DeltaFileMedia` classifies each path with `Os::FileSystem::getPathType`: `old_file` and `patch_file` must be
   regular files and `new_file` must be a regular file or absent; directories, FIFOs, devices and symbolic links are
   rejected `OPEN_FAILED` so a path with no writer can never block the rate-group thread in `open()`. `old_file` and
