@@ -11,6 +11,9 @@
 #include <vector>
 
 #include "FprimeExtras/Update/Delta/DeltaCodec.hpp"
+#include "FprimeExtras/Update/Delta/DeltaCoderLzss.hpp"
+#include "FprimeExtras/Update/Delta/DeltaCoderNone.hpp"
+#include "FprimeExtras/Update/Delta/DeltaCoderRle.hpp"
 #include "FprimeExtras/Update/Delta/test/ut/DeltaTestVectors.hpp"
 #include "Os/FileSystem.hpp"
 #include "Utils/Hash/Crc32/Crc32.hpp"
@@ -85,19 +88,99 @@ public:
   U32 refreshes;
 };
 
+//! Drives the stage functions of a DeltaCodec the way Update.DeltaPatchMachine
+//! does, exposing the lifecycle as a state so the engine tests can observe
+//! where a patch stops. Mirrors the machine: begin() selects the resume stage,
+//! each step() delegates one unit of work, STAGE_DONE advances, any error
+//! fails and latches.
+class TestCodec {
+public:
+  enum State { IDLE, VERIFY_NEW, VERIFY_OLD, PATCHING, VERIFY_FINAL, COMPLETE, FAILED };
+
+  explicit TestCodec(DeltaCoder &coder)
+      : codec(coder), m_state(IDLE), m_last(DeltaCodec::OP_OK) {}
+
+  DeltaCodec::Status begin(DeltaMedia &old, DeltaMedia &patch, DeltaMedia &out) {
+    this->m_last = this->codec.begin(old, patch, out);
+    if (this->m_last != DeltaCodec::OP_OK) {
+      this->m_state = FAILED;
+      return this->m_last;
+    }
+    this->m_state = this->codec.hasOutputToVerify() ? VERIFY_NEW : VERIFY_OLD;
+    return DeltaCodec::OP_OK;
+  }
+
+  DeltaCodec::Status step() {
+    DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+    DeltaCodec::Status status = DeltaCodec::OP_OK;
+    State next = this->m_state;
+    switch (this->m_state) {
+    case VERIFY_NEW:
+      status = this->codec.verifyNew(result);
+      next = VERIFY_OLD;
+      break;
+    case VERIFY_OLD:
+      status = this->codec.verifyOld(result);
+      next = PATCHING;
+      break;
+    case PATCHING:
+      status = this->codec.patchChunk(result);
+      next = VERIFY_FINAL;
+      break;
+    case VERIFY_FINAL:
+      status = this->codec.verifyFinal(result);
+      next = COMPLETE;
+      break;
+    default:
+      return this->m_last; // idle, complete or failed: nothing to do
+    }
+    if (status != DeltaCodec::OP_OK) {
+      this->m_state = FAILED;
+      this->m_last = status;
+      return status;
+    }
+    if (result == DeltaCodec::STAGE_DONE) {
+      this->m_state = next;
+    }
+    return DeltaCodec::OP_OK;
+  }
+
+  void reset() {
+    this->codec.reset();
+    this->m_state = IDLE;
+    this->m_last = DeltaCodec::OP_OK;
+  }
+  void setCoder(DeltaCoder &coder) { this->codec.setCoder(coder); }
+  State state() const { return this->m_state; }
+  DeltaCodec::Status lastStatus() const { return this->m_last; }
+  FwSizeType chunkIndex() const { return this->codec.chunkIndex(); }
+  FwSizeType chunkCount() const { return this->codec.chunkCount(); }
+  FwSizeType resumedChunks() const { return this->codec.resumedChunks(); }
+  FwSizeType bytesWritten() const { return this->codec.bytesWritten(); }
+  FwSizeType oldSize() const { return this->codec.oldSize(); }
+  U32 oldCrc() const { return this->codec.oldCrc(); }
+  FwSizeType newSize() const { return this->codec.newSize(); }
+  U32 newCrc() const { return this->codec.newCrc(); }
+
+  DeltaCodec codec;
+
+private:
+  State m_state;
+  DeltaCodec::Status m_last;
+};
+
 static std::vector<U8> toVector(const U8 *data, FwSizeType size) {
   return std::vector<U8>(data, data + size);
 }
 
 //! Run an engine to completion or failure; returns the final status. Caps steps
 //! to guarantee termination.
-static DeltaCodec::Status run(DeltaCodec &codec, U32 &steps) {
-  steps = 0;
+static DeltaCodec::Status run(TestCodec &codec, U32 &steps) {
   DeltaCodec::Status status = DeltaCodec::OP_OK;
-  while (codec.state() != DeltaCodec::COMPLETE &&
-         codec.state() != DeltaCodec::FAILED && steps < 10000) {
+  for (steps = 0; steps < 10000 && codec.state() != TestCodec::COMPLETE &&
+                  codec.state() != TestCodec::FAILED;
+       steps++) {
     status = codec.step();
-    steps++;
   }
   return status;
 }
@@ -277,9 +360,9 @@ static void applyNominal(DeltaCoder &coder, const U8 *patch,
   MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   MemoryMedia patchMedia(patch, patchSize);
   MemoryMedia newMedia;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_OLD);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_OLD);
   EXPECT_EQ(codec.oldSize(), TestVectors::OLD_IMAGE_SIZE);
   EXPECT_EQ(codec.newSize(), TestVectors::NEW_IMAGE_SIZE);
   EXPECT_EQ(codec.oldCrc(), TestVectors::OLD_CRC);
@@ -290,7 +373,7 @@ static void applyNominal(DeltaCoder &coder, const U8 *patch,
   EXPECT_EQ(codec.chunkCount(), expectedChunks);
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   EXPECT_EQ(codec.chunkIndex(), expectedChunks);
   EXPECT_EQ(codec.resumedChunks(), 0u);
   EXPECT_EQ(codec.bytesWritten(), TestVectors::NEW_IMAGE_SIZE);
@@ -343,12 +426,12 @@ TEST(DeltaCodec, ResumeSkipsVerifiedChunks) {
   const FwSizeType present = 4 * TestVectors::CHUNK_BYTES + 17;
   MemoryMedia newMedia(TestVectors::NEW_IMAGE, present);
   newMedia.data[3 * TestVectors::CHUNK_BYTES + 5] ^= 0xFF;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_NEW);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   EXPECT_EQ(codec.resumedChunks(), 3u);
   EXPECT_EQ(newMedia.data,
             toVector(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE));
@@ -359,11 +442,11 @@ TEST(DeltaCodec, ResumeCompleteOutput) {
   MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   MemoryMedia patchMedia(TestVectors::PATCH_LZSS, TestVectors::PATCH_LZSS_SIZE);
   MemoryMedia newMedia(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE);
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   EXPECT_EQ(codec.resumedChunks(), codec.chunkCount());
   EXPECT_EQ(newMedia.writes, 0u);
 }
@@ -374,10 +457,10 @@ TEST(DeltaCodec, OutputStale) {
   MemoryMedia patchMedia(TestVectors::PATCH_LZSS, TestVectors::PATCH_LZSS_SIZE);
   std::vector<U8> big(TestVectors::NEW_IMAGE_SIZE + 1, 0);
   MemoryMedia newMedia(big.data(), big.size());
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   EXPECT_EQ(codec.begin(oldMedia, patchMedia, newMedia),
             DeltaCodec::OUTPUT_STALE);
-  EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+  EXPECT_EQ(codec.state(), TestCodec::FAILED);
 }
 
 // ----------------------------------------------------------------------
@@ -387,11 +470,11 @@ TEST(DeltaCodec, OutputStale) {
 static DeltaCodec::Status applyPatch(DeltaCoder &coder,
                                      const std::vector<U8> &patch,
                                      const std::vector<U8> &oldImage,
-                                     DeltaCodec::State &finalState) {
+                                     TestCodec::State &finalState) {
   MemoryMedia oldMedia(oldImage.data(), oldImage.size());
   MemoryMedia patchMedia(patch.data(), patch.size());
   MemoryMedia newMedia;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   DeltaCodec::Status status = codec.begin(oldMedia, patchMedia, newMedia);
   if (status == DeltaCodec::OP_OK) {
     U32 steps = 0;
@@ -407,7 +490,7 @@ TEST(DeltaCodec, RejectsBadHeader) {
       toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   const std::vector<U8> good =
       toVector(TestVectors::PATCH_NONE, TestVectors::PATCH_NONE_SIZE);
-  DeltaCodec::State state;
+  TestCodec::State state;
 
   std::vector<U8> patch = good;
   patch[0] = 'X';
@@ -434,7 +517,7 @@ TEST(DeltaCodec, RejectsBadHeader) {
   DeltaCoderLzss lzss;
   EXPECT_EQ(applyPatch(lzss, good, oldImage, state),
             DeltaCodec::CODER_MISMATCH);
-  EXPECT_EQ(state, DeltaCodec::FAILED);
+  EXPECT_EQ(state, TestCodec::FAILED);
 }
 
 // Write an F Prime serialized (big-endian) value of `width` bytes
@@ -545,10 +628,10 @@ TEST(DeltaCodec, RejectsPendingCoderState) {
                             : static_cast<DeltaCoder &>(lzss);
     const std::vector<U8> patch =
         buildSingleChunkPatch(c.coderId, c.newSize, 0x6C, c.coded);
-    DeltaCodec::State state;
+    TestCodec::State state;
     EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_OPCODE)
         << c.name;
-    EXPECT_EQ(state, DeltaCodec::FAILED) << c.name;
+    EXPECT_EQ(state, TestCodec::FAILED) << c.name;
   }
   // Controls: the same streams closed at a token boundary are accepted
   const std::vector<Case> valid = {
@@ -571,10 +654,10 @@ TEST(DeltaCodec, RejectsPendingCoderState) {
                             : static_cast<DeltaCoder &>(lzss);
     const std::vector<U8> patch =
         buildSingleChunkPatch(c.coderId, c.newSize, 0x6C, c.coded);
-    DeltaCodec::State state;
+    TestCodec::State state;
     EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::OP_OK)
         << c.name;
-    EXPECT_EQ(state, DeltaCodec::COMPLETE) << c.name;
+    EXPECT_EQ(state, TestCodec::COMPLETE) << c.name;
   }
 }
 
@@ -589,10 +672,10 @@ TEST(DeltaCodec, RejectsSizeWidthMismatch) {
                                                TestVectors::PATCH_NONE_W4_SIZE)
                                     : toVector(TestVectors::PATCH_NONE_W8,
                                                TestVectors::PATCH_NONE_W8_SIZE);
-  DeltaCodec::State state;
+  TestCodec::State state;
   EXPECT_EQ(applyPatch(coder, other, oldImage, state),
             DeltaCodec::SIZE_WIDTH_MISMATCH);
-  EXPECT_EQ(state, DeltaCodec::FAILED);
+  EXPECT_EQ(state, TestCodec::FAILED);
 
   // A short patch from the other width is still reported as a width mismatch,
   // since the fixed prefix is checked before the width-dependent header length
@@ -613,7 +696,7 @@ TEST(DeltaCodec, RejectsOversizedGeometry) {
       toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   const std::vector<U8> good =
       toVector(TestVectors::PATCH_NONE, TestVectors::PATCH_NONE_SIZE);
-  DeltaCodec::State state;
+  TestCodec::State state;
 
   std::vector<U8> patch = good;
   setHeaderSize(patch, DeltaCodec::HDR_CHUNK_BYTES,
@@ -641,7 +724,7 @@ TEST(DeltaCodec, RejectsOversizedGeometry) {
   const FwSizeType huge = static_cast<FwSizeType>(0) - 16;
   putBe(&patch[DeltaCodec::HEADER_SIZE], huge, DeltaCodec::SIZE_FIELD_WIDTH);
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_OPCODE);
-  EXPECT_EQ(state, DeltaCodec::FAILED);
+  EXPECT_EQ(state, TestCodec::FAILED);
 }
 
 // ----------------------------------------------------------------------
@@ -731,7 +814,7 @@ TEST(DeltaCodec, RejectsOutOfRangeOperands) {
   DeltaCoderNone coder;
   const FwSizeType oldSize = 100;
   const std::vector<U8> oldImage = pseudoRandom(oldSize, 7);
-  DeltaCodec::State state;
+  TestCodec::State state;
   std::vector<U8> ops;
 
   // SEEK below zero
@@ -741,7 +824,7 @@ TEST(DeltaCodec, RejectsOutOfRangeOperands) {
                        buildNonePatch(oldImage, oldImage, oldSize, {ops}),
                        oldImage, state),
             DeltaCodec::BAD_OPCODE);
-  EXPECT_EQ(state, DeltaCodec::FAILED);
+  EXPECT_EQ(state, TestCodec::FAILED);
 
   // SEEK past the end
   ops.clear();
@@ -798,11 +881,11 @@ TEST(DeltaCodec, RejectsOutOfRangeOperands) {
       buildNonePatch(oldImage, rotated, oldSize, {ops});
   MemoryMedia patchMedia(patch.data(), patch.size());
   MemoryMedia newMedia;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   U32 steps = 0;
   EXPECT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   EXPECT_EQ(newMedia.data, rotated);
 }
 
@@ -813,7 +896,7 @@ TEST(DeltaCodec, RejectsConsecutiveSeeks) {
   // second SEEK rather than run to exhaustion of the coded payload.
   const FwSizeType oldSize = 100;
   const std::vector<U8> oldImage = pseudoRandom(oldSize, 11);
-  DeltaCodec::State state;
+  TestCodec::State state;
 
   // Two literal SEEKs with the None coder: a valid encoder folds these into one
   DeltaCoderNone none;
@@ -824,7 +907,7 @@ TEST(DeltaCodec, RejectsConsecutiveSeeks) {
   EXPECT_EQ(applyPatch(none, buildNonePatch(oldImage, oldImage, oldSize, {ops}),
                        oldImage, state),
             DeltaCodec::BAD_OPCODE);
-  EXPECT_EQ(state, DeltaCodec::FAILED);
+  EXPECT_EQ(state, TestCodec::FAILED);
 
   // LZSS flood: literal "SEEK 0" then maximal overlapping matches expand a
   // 16 KiB coded chunk toward ~2 MiB of SEEKs; the patch media counts reads to
@@ -852,12 +935,12 @@ TEST(DeltaCodec, RejectsConsecutiveSeeks) {
   MemoryMedia oldMedia(oldImage.data(), oldImage.size());
   MemoryMedia patchMedia(patch.data(), patch.size());
   MemoryMedia newMedia;
-  DeltaCodec codec(lzss);
+  TestCodec codec(lzss);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   const U32 readsBefore = patchMedia.reads;
   U32 steps = 0;
   EXPECT_EQ(run(codec, steps), DeltaCodec::BAD_OPCODE);
-  EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+  EXPECT_EQ(codec.state(), TestCodec::FAILED);
   // Rejection at the second SEEK needs a single patch-buffer fill of the chunk
   EXPECT_LE(patchMedia.reads - readsBefore, 2u);
 }
@@ -888,31 +971,31 @@ TEST(DeltaCodec, VerifySpansSteps) {
   MemoryMedia patchMedia(patch.data(), patch.size());
   MemoryMedia newMedia(image.data(), 3 * chunkBytes);
   newMedia.data[chunkBytes + 2000] ^= 0xFF;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_NEW);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
 
   // Step 1: chunk 0 (3000 B) verified, 1096 B of chunk 1 read
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_NEW);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
   EXPECT_EQ(codec.resumedChunks(), 1u);
   // Step 2: chunk 1 completes and fails its CRC -> verification stops, old
   // image check begins
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_OLD);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_OLD);
   EXPECT_EQ(codec.resumedChunks(), 1u);
   EXPECT_EQ(codec.chunkIndex(), 1u);
   // Old image: 10000 B takes ceil(10000/4096) = 3 steps
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_OLD);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_OLD);
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_OLD);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_OLD);
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::PATCHING);
+  EXPECT_EQ(codec.state(), TestCodec::PATCHING);
 
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   // chunks 1..3 re-applied, finish (flush), then ceil(10000/4096) = 3 read-back
   // steps
   EXPECT_EQ(steps, 3u + 1u + 3u);
@@ -926,7 +1009,7 @@ TEST(DeltaCodec, RejectsOldImageMismatch) {
   DeltaCoderNone coder;
   const std::vector<U8> patch =
       toVector(TestVectors::PATCH_NONE, TestVectors::PATCH_NONE_SIZE);
-  DeltaCodec::State state;
+  TestCodec::State state;
 
   std::vector<U8> oldImage =
       toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
@@ -945,7 +1028,7 @@ TEST(DeltaCodec, RejectsTruncatedAndOversizedPatch) {
       toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   const std::vector<U8> good =
       toVector(TestVectors::PATCH_NONE, TestVectors::PATCH_NONE_SIZE);
-  DeltaCodec::State state;
+  TestCodec::State state;
 
   std::vector<U8> patch = good;
   patch.resize(good.size() - 5);
@@ -967,7 +1050,7 @@ TEST(DeltaCodec, RejectsCorruptChunk) {
       toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   const std::vector<U8> good =
       toVector(TestVectors::PATCH_NONE, TestVectors::PATCH_NONE_SIZE);
-  DeltaCodec::State state;
+  TestCodec::State state;
 
   // Corrupt chunk 0's declared output CRC
   std::vector<U8> patch = good;
@@ -995,11 +1078,11 @@ TEST(DeltaCodec, MediaErrors) {
     MemoryMedia patchMedia(TestVectors::PATCH_LZSS,
                            TestVectors::PATCH_LZSS_SIZE);
     MemoryMedia newMedia;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     oldMedia.failReads = true;
     EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR);
-    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+    EXPECT_EQ(codec.state(), TestCodec::FAILED);
     EXPECT_EQ(codec.lastStatus(), DeltaCodec::READ_ERROR);
     EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR); // stays failed
   }
@@ -1009,7 +1092,7 @@ TEST(DeltaCodec, MediaErrors) {
                            TestVectors::PATCH_LZSS_SIZE);
     MemoryMedia newMedia;
     newMedia.failWrites = true;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     U32 steps = 0;
     EXPECT_EQ(run(codec, steps), DeltaCodec::WRITE_ERROR);
@@ -1020,7 +1103,7 @@ TEST(DeltaCodec, MediaErrors) {
     MemoryMedia patchMedia(TestVectors::PATCH_LZSS,
                            TestVectors::PATCH_LZSS_SIZE);
     MemoryMedia newMedia;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     ASSERT_EQ(codec.step(), DeltaCodec::OP_OK); // old verify
     patchMedia.failReads = true;
@@ -1039,11 +1122,11 @@ TEST(DeltaCodec, ReadBackCatchesStorageFaults) {
                            TestVectors::PATCH_NONE_SIZE);
     MemoryMedia newMedia;
     newMedia.corruptStored = true;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     U32 steps = 0;
     EXPECT_EQ(run(codec, steps), DeltaCodec::NEW_IMAGE_MISMATCH);
-    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+    EXPECT_EQ(codec.state(), TestCodec::FAILED);
     EXPECT_EQ(newMedia.flushes, static_cast<U32>(codec.chunkCount()) + 1u);
   }
   {
@@ -1052,11 +1135,11 @@ TEST(DeltaCodec, ReadBackCatchesStorageFaults) {
                            TestVectors::PATCH_NONE_SIZE);
     MemoryMedia newMedia;
     newMedia.failFlush = true;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     U32 steps = 0;
     EXPECT_EQ(run(codec, steps), DeltaCodec::WRITE_ERROR);
-    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+    EXPECT_EQ(codec.state(), TestCodec::FAILED);
   }
   {
     // Read failure during the read-back pass is a READ_ERROR
@@ -1064,14 +1147,14 @@ TEST(DeltaCodec, ReadBackCatchesStorageFaults) {
     MemoryMedia patchMedia(TestVectors::PATCH_NONE,
                            TestVectors::PATCH_NONE_SIZE);
     MemoryMedia newMedia;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-    while (codec.state() != DeltaCodec::VERIFY_FINAL) {
+    while (codec.state() != TestCodec::VERIFY_FINAL) {
       ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
     }
     newMedia.failReads = true;
     EXPECT_EQ(codec.step(), DeltaCodec::READ_ERROR);
-    EXPECT_EQ(codec.state(), DeltaCodec::FAILED);
+    EXPECT_EQ(codec.state(), TestCodec::FAILED);
   }
 }
 
@@ -1080,13 +1163,13 @@ TEST(DeltaCodec, ResetReturnsToIdle) {
   MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
   MemoryMedia patchMedia(TestVectors::PATCH_LZSS, TestVectors::PATCH_LZSS_SIZE);
   MemoryMedia newMedia;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
   ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
   EXPECT_EQ(codec.chunkIndex(), 1u);
   codec.reset();
-  EXPECT_EQ(codec.state(), DeltaCodec::IDLE);
+  EXPECT_EQ(codec.state(), TestCodec::IDLE);
   EXPECT_EQ(codec.chunkIndex(), 0u);
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK); // no-op when idle
 }
@@ -1120,7 +1203,7 @@ TEST(DeltaCodec, FailedChunkNeverCommitsOutput) {
   MemoryMedia oldMedia(oldImage.data(), oldImage.size());
   MemoryMedia badMedia(patch.data(), patch.size());
   MemoryMedia newMedia;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, badMedia, newMedia), DeltaCodec::OP_OK);
   U32 steps = 0;
   EXPECT_EQ(run(codec, steps), DeltaCodec::CHUNK_CRC);
@@ -1136,7 +1219,7 @@ TEST(DeltaCodec, FailedChunkNeverCommitsOutput) {
   ASSERT_EQ(codec.begin(oldMedia, goodMedia, newMedia), DeltaCodec::OP_OK);
   steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   EXPECT_EQ(codec.resumedChunks(), bad);
   EXPECT_EQ(newMedia.data,
             toVector(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE));
@@ -1157,14 +1240,14 @@ TEST(DeltaCodec, IoBudgetSpansSteps) {
   MemoryMedia oldMedia(image.data(), image.size());
   MemoryMedia patchMedia(patch.data(), patch.size());
   MemoryMedia newMedia;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK); // old image verified
-  ASSERT_EQ(codec.state(), DeltaCodec::PATCHING);
+  ASSERT_EQ(codec.state(), TestCodec::PATCHING);
 
   U32 patchSteps = 0;
   U32 maxIoPerStep = 0;
-  for (U32 i = 0; i < 1000 && codec.state() == DeltaCodec::PATCHING; i++) {
+  for (U32 i = 0; i < 1000 && codec.state() == TestCodec::PATCHING; i++) {
     const U32 before =
         oldMedia.reads + patchMedia.reads + newMedia.reads + newMedia.writes;
     ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
@@ -1185,7 +1268,7 @@ TEST(DeltaCodec, IoBudgetSpansSteps) {
                              imageSize / DELTA_OUTPUT_BUFFER_SIZE + 2));
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   EXPECT_EQ(newMedia.data, image);
 }
 
@@ -1203,7 +1286,7 @@ TEST(DeltaCodec, ClassifiesShrunkMedia) {
     MemoryMedia oldMedia(oldImage.data(), oldImage.size());
     MemoryMedia patchMedia(patch.data(), patch.size());
     MemoryMedia newMedia;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     patchMedia.data.resize(DeltaCodec::HEADER_SIZE + 2);
     U32 steps = 0;
@@ -1213,7 +1296,7 @@ TEST(DeltaCodec, ClassifiesShrunkMedia) {
     MemoryMedia oldMedia(oldImage.data(), oldImage.size());
     MemoryMedia patchMedia(patch.data(), patch.size());
     MemoryMedia newMedia;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     oldMedia.data.resize(100);
     U32 steps = 0;
@@ -1223,13 +1306,13 @@ TEST(DeltaCodec, ClassifiesShrunkMedia) {
     MemoryMedia oldMedia(oldImage.data(), oldImage.size());
     MemoryMedia patchMedia(patch.data(), patch.size());
     MemoryMedia newMedia(TestVectors::NEW_IMAGE, 2 * TestVectors::CHUNK_BYTES);
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-    EXPECT_EQ(codec.state(), DeltaCodec::VERIFY_NEW);
+    EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
     newMedia.data.resize(10); // output vanished under us
     U32 steps = 0;
     ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-    EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+    EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
     EXPECT_EQ(codec.resumedChunks(), 0u);
     EXPECT_EQ(newMedia.data,
               toVector(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE));
@@ -1241,7 +1324,7 @@ TEST(DeltaCodec, ClassifiesShrunkMedia) {
     MemoryMedia patchMedia(patch.data(), patch.size());
     MemoryMedia newMedia;
     newMedia.failRefresh = true;
-    DeltaCodec codec(coder);
+    TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
     U32 steps = 0;
     EXPECT_EQ(run(codec, steps), DeltaCodec::NEW_IMAGE_MISMATCH);
@@ -1305,11 +1388,11 @@ TEST(DeltaFileMedia, ApplyThroughFiles) {
             DeltaMedia::OUT_OF_RANGE);
 
   DeltaCoderLzss coder;
-  DeltaCodec codec(coder);
+  TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), DeltaCodec::COMPLETE);
+  EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
   newMedia.close();
   EXPECT_EQ(readFile(newPath),
             toVector(TestVectors::NEW_IMAGE, TestVectors::NEW_IMAGE_SIZE));

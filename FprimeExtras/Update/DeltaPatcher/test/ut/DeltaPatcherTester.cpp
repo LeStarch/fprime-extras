@@ -104,7 +104,7 @@ void DeltaPatcherTester ::nominal() {
   ASSERT_EVENTS_PatchStarted(0, this->m_patch.c_str(), this->m_old.c_str(),
                              this->m_new.c_str(),
                              this->component.m_codec.chunkCount());
-  ASSERT_TLM_State(0, DeltaPatchState::PATCHING);
+  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_OLD);
   ASSERT_TLM_ChunksTotal_SIZE(1);
   ASSERT_TLM_ChunksTotal(0, CHUNK_COUNT);
   ASSERT_TLM_ChunksDone(0, 0);
@@ -348,9 +348,10 @@ void DeltaPatcherTester ::queueOverflow() {
                       TEST_INSTANCE_QUEUE_DEPTH + 2, Fw::CmdResponse::BUSY);
   ASSERT_EVENTS_PatchRejected_SIZE(1);
   ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BUSY);
-  // Queued commands are still dispatched, MAX_DISPATCH_PER_TICK per tick
+  // Queued commands are still dispatched: run drains MAX_DISPATCH_PER_TICK
+  // before and after sending the state-machine tick
   this->invoke_to_run(0, 0);
-  ASSERT_CMD_RESPONSE_SIZE(2 + DeltaPatcher::MAX_DISPATCH_PER_TICK);
+  ASSERT_CMD_RESPONSE_SIZE(2 + 2 * DeltaPatcher::MAX_DISPATCH_PER_TICK);
 }
 
 void DeltaPatcherTester ::sameFileAliased() {
@@ -469,13 +470,13 @@ void DeltaPatcherTester ::outputReplacedBeforeVerify() {
   // Tick until every chunk is written but read-back has not begun
   U32 ticks = 0;
   while (ticks < MAX_TICKS &&
-         this->component.m_codec.state() == DeltaCodec::PATCHING &&
+         this->component.deltaPatchMachine_getState() == DeltaPatcher::Update_DeltaPatchMachine::State::PATCHING &&
          this->component.m_codec.chunkIndex() <
              this->component.m_codec.chunkCount()) {
     this->invoke_to_run(0, 0);
     ticks++;
   }
-  ASSERT_EQ(this->component.m_codec.state(), DeltaCodec::PATCHING);
+  ASSERT_EQ(this->component.deltaPatchMachine_getState(), DeltaPatcher::Update_DeltaPatchMachine::State::PATCHING);
   ASSERT_EQ(this->component.m_codec.chunkIndex(),
             this->component.m_codec.chunkCount());
   // Replace the output path with a same-sized impostor; the patcher's open

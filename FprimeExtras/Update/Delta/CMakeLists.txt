@@ -11,12 +11,17 @@
 ####
 register_fprime_library(
     SOURCES
-        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoder.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderNone.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderRle.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderLzss.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaMedia.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCodec.cpp"
     HEADERS
         "${CMAKE_CURRENT_LIST_DIR}/DeltaWindow.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCoder.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderNone.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderRle.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderLzss.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaMedia.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCodec.hpp"
     DEPENDS

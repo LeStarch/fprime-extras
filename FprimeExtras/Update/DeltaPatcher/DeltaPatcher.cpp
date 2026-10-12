@@ -29,11 +29,10 @@ DeltaPatcher ::DeltaPatcher(const char* const compName)
       m_oldMedia(),
       m_patchMedia(),
       m_newMedia(),
-      m_newFile(),
-      m_opCode(0),
-      m_cmdSeq(0),
-      m_state(DeltaPatchState::IDLE),
-      m_resumeReported(false) {}
+      m_pending() {
+    this->m_pending.opCode = 0;
+    this->m_pending.cmdSeq = 0;
+}
 
 DeltaPatcher ::~DeltaPatcher() {
     this->closeMedia();
@@ -48,20 +47,263 @@ void DeltaPatcher ::setCoder(DeltaCoder& coder) {
 // ----------------------------------------------------------------------
 
 void DeltaPatcher ::run_handler(FwIndexType portNum, U32 context) {
-    // Drain the command queue (bounded) before doing patch work so ABORT_PATCH takes effect this tick
-    for (FwSizeType i = 0; i < MAX_DISPATCH_PER_TICK; i++) {
-        if (this->doDispatch() == MSG_DISPATCH_EMPTY) {
-            break;
+    // Commands (and signals left from the previous tick) first, so ABORT_PATCH takes effect this tick and the queue
+    // has room for the tick; then the tick and the stage transition its action may produce
+    this->drainQueue();
+    this->deltaPatchMachine_sendSignal_tick();
+    this->drainQueue();
+}
+
+// ----------------------------------------------------------------------
+// Handler implementations for commands
+// ----------------------------------------------------------------------
+
+void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
+                                           U32 cmdSeq,
+                                           const Fw::CmdStringArg& old_file,
+                                           const Fw::CmdStringArg& patch_file,
+                                           const Fw::CmdStringArg& new_file) {
+    // Busy is "a patch is bound", not the machine state: a `start` sent by an earlier APPLY_PATCH in this same
+    // drain may not have been dispatched yet, so the machine can still read IDLE while a patch is already bound
+    if (this->isPatchBound()) {
+        this->rejectApply(opCode, cmdSeq, DeltaPatchStatus::BUSY, Fw::CmdResponse::BUSY);
+        return;
+    }
+    // The old image is never written: refuse aliased paths before any file is
+    // opened. Paths are compared after textual resolution (`.`, `..`, duplicate
+    // separators, CWD) and, where the platform exposes file identity, by
+    // device/inode so hard links cannot slip past. Symbolic links and special files are refused by the media open.
+    const PathCheck check = DeltaPatcher::checkPaths(old_file, patch_file, new_file);
+    if (check != PATHS_DISTINCT) {
+        const DeltaPatchStatus status =
+            (check == PATHS_ALIASED) ? DeltaPatchStatus::SAME_FILE : DeltaPatchStatus::OPEN_FAILED;
+        this->rejectApply(opCode, cmdSeq, status, Fw::CmdResponse::VALIDATION_ERROR);
+        return;
+    }
+    this->m_codec.reset();
+
+    const bool newExisted = Os::FileSystem::exists(new_file.toChar());
+    bool opened = (this->m_oldMedia.open(old_file.toChar(), DeltaFileMedia::READ_ONLY) == Os::File::OP_OK);
+    opened = opened && (this->m_patchMedia.open(patch_file.toChar(), DeltaFileMedia::READ_ONLY) == Os::File::OP_OK);
+    opened = opened && (this->m_newMedia.open(new_file.toChar(), DeltaFileMedia::READ_WRITE) == Os::File::OP_OK);
+    if (!opened) {
+        this->closeMedia();
+        this->rejectApply(opCode, cmdSeq, DeltaPatchStatus::OPEN_FAILED, Fw::CmdResponse::EXECUTION_ERROR);
+        this->deltaPatchMachine_sendSignal_reject();
+        return;
+    }
+
+    const DeltaCodec::Status status = this->m_codec.begin(this->m_oldMedia, this->m_patchMedia, this->m_newMedia);
+    if (status != DeltaCodec::OP_OK) {
+        this->closeMedia();
+        this->m_codec.reset();
+        if (!newExisted) {
+            // A rejected header must not leave an empty output file behind
+            (void)Os::FileSystem::removeFile(new_file.toChar());
         }
+        this->rejectApply(opCode, cmdSeq, DeltaPatcher::toStatus(status), Fw::CmdResponse::EXECUTION_ERROR);
+        this->deltaPatchMachine_sendSignal_reject();
+        return;
     }
-    if (this->m_state == DeltaPatchState::PATCHING) {
-        this->stepPatch();
+
+    this->m_pending.newFile = new_file;
+    this->m_pending.opCode = opCode;
+    this->m_pending.cmdSeq = cmdSeq;
+    this->log_ACTIVITY_HI_PatchStarted(patch_file, old_file, new_file, static_cast<U32>(this->m_codec.chunkCount()));
+    this->tlmWrite_ChunksTotal(static_cast<U32>(this->m_codec.chunkCount()));
+    this->tlmWrite_ChunksDone(0);
+    this->tlmWrite_BytesWritten(0);
+    // The machine takes over; the command response is deferred until it reports completion, failure or abort
+    this->deltaPatchMachine_sendSignal_start();
+}
+
+void DeltaPatcher ::ABORT_PATCH_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
+    if (!this->isPatchBound()) {
+        this->log_WARNING_LO_AbortIgnored(DeltaPatcher::toState(this->deltaPatchMachine_getState()));
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
+        return;
     }
+    // Answered by reportAborted once the machine has honoured the abort, after the pending APPLY_PATCH
+    this->deltaPatchMachine_sendSignal_abort(DeltaAbortRequest(opCode, cmdSeq));
+}
+
+void DeltaPatcher ::APPLY_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) {
+    this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::BUSY);
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
+}
+
+void DeltaPatcher ::ABORT_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) {
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
+}
+
+// ----------------------------------------------------------------------
+// Implementations for internal state machine actions
+// ----------------------------------------------------------------------
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyNew(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+    // Evaluate the delegate before reading `result`: argument evaluation order is unspecified
+    const DeltaCodec::Status status = this->m_codec.verifyNew(result);
+    this->reportStep(status, result);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+    // Evaluate the delegate before reading `result`: argument evaluation order is unspecified
+    const DeltaCodec::Status status = this->m_codec.verifyOld(result);
+    this->reportStep(status, result);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_doPatchChunk(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+    // Evaluate the delegate before reading `result`: argument evaluation order is unspecified
+    const DeltaCodec::Status status = this->m_codec.patchChunk(result);
+    this->reportStep(status, result);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyFinal(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+    // Evaluate the delegate before reading `result`: argument evaluation order is unspecified
+    const DeltaCodec::Status status = this->m_codec.verifyFinal(result);
+    this->reportStep(status, result);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmVerifyNew(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->tlmWrite_State(DeltaPatchState::VERIFY_NEW);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->tlmWrite_State(DeltaPatchState::VERIFY_OLD);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmPatching(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->tlmWrite_State(DeltaPatchState::PATCHING);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmVerifyFinal(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->tlmWrite_State(DeltaPatchState::VERIFY_FINAL);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmComplete(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->tlmWrite_State(DeltaPatchState::COMPLETE);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmFailed(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->tlmWrite_State(DeltaPatchState::FAILED);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_reportResumed(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    if (this->m_codec.resumedChunks() > 0) {
+        this->log_ACTIVITY_HI_PatchResumed(this->m_pending.newFile, static_cast<U32>(this->m_codec.resumedChunks()),
+                                           static_cast<U32>(this->m_codec.chunkCount()));
+    }
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_reportComplete(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    const U32 crc = this->m_codec.newCrc();
+    this->log_ACTIVITY_HI_PatchComplete(this->m_pending.newFile, this->m_codec.newSize(), crc);
+    this->completePending(DeltaPatchStatus::OP_OK, Fw::CmdResponse::OK);
+    if (this->isConnected_patchComplete_OutputPort(0)) {
+        this->patchComplete_out(0, this->m_pending.newFile, crc);
+    }
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_reportFailed(SmId smId,
+                                                                 Update_DeltaPatchMachine::Signal signal,
+                                                                 const Update::DeltaPatchStatus& value) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    if (value == DeltaPatchStatus::OLD_IMAGE_MISMATCH) {
+        FwSizeType actualSize = 0;
+        (void)this->m_oldMedia.size(actualSize);  // size is reported as-is; 0 when the media cannot be sized
+        this->log_WARNING_HI_OldImageMismatch(this->m_codec.oldCrc(), this->m_codec.actualOldCrc(),
+                                              this->m_codec.oldSize(), actualSize);
+    } else {
+        this->log_WARNING_HI_ChunkFailed(static_cast<U32>(this->m_codec.chunkIndex()), value);
+    }
+    this->completePending(value, Fw::CmdResponse::EXECUTION_ERROR);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAborted(SmId smId,
+                                                                  Update_DeltaPatchMachine::Signal signal,
+                                                                  const Update::DeltaAbortRequest& value) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->log_ACTIVITY_HI_PatchAborted(static_cast<U32>(this->m_codec.chunkIndex()));
+    this->completePending(DeltaPatchStatus::ABORTED, Fw::CmdResponse::EXECUTION_ERROR);
+    this->cmdResponse_out(value.get_opCode(), value.get_cmdSeq(), Fw::CmdResponse::OK);
+    // IDLE has no entry action (the initial transition runs before ports are connected), so report it here
+    this->tlmWrite_State(DeltaPatchState::IDLE);
+}
+
+void DeltaPatcher ::Update_DeltaPatchMachine_action_doRelease(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    this->m_codec.reset();
+    this->closeMedia();
+}
+
+// ----------------------------------------------------------------------
+// Implementations for internal state machine guards
+// ----------------------------------------------------------------------
+
+bool DeltaPatcher ::Update_DeltaPatchMachine_guard_hasOutputToVerify(SmId smId,
+                                                                     Update_DeltaPatchMachine::Signal signal) const {
+    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    return this->m_codec.hasOutputToVerify();
 }
 
 // ----------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------
+
+void DeltaPatcher ::drainQueue() {
+    for (FwSizeType i = 0; i < MAX_DISPATCH_PER_TICK; i++) {
+        if (this->doDispatch() == MSG_DISPATCH_EMPTY) {
+            break;
+        }
+    }
+}
+
+void DeltaPatcher ::reportStep(DeltaCodec::Status status, DeltaCodec::StepResult result) {
+    this->tlmWrite_ChunksDone(static_cast<U32>(this->m_codec.chunkIndex()));
+    this->tlmWrite_BytesWritten(this->m_codec.bytesWritten());
+    if (status != DeltaCodec::OP_OK) {
+        this->deltaPatchMachine_sendSignal_fail(DeltaPatcher::toStatus(status));
+    } else if (result == DeltaCodec::STAGE_DONE) {
+        this->deltaPatchMachine_sendSignal_stageDone();
+    }
+}
+
+void DeltaPatcher ::rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatus status, Fw::CmdResponse response) {
+    this->log_WARNING_HI_PatchRejected(status);
+    this->tlmWrite_LastStatus(status);
+    this->cmdResponse_out(opCode, cmdSeq, response);
+}
+
+void DeltaPatcher ::completePending(DeltaPatchStatus status, Fw::CmdResponse response) {
+    this->tlmWrite_LastStatus(status);
+    this->cmdResponse_out(this->m_pending.opCode, this->m_pending.cmdSeq, response);
+}
+
+void DeltaPatcher ::closeMedia() {
+    this->m_oldMedia.close();
+    this->m_patchMedia.close();
+    this->m_newMedia.close();
+}
+
+bool DeltaPatcher ::isPatchBound() const {
+    return this->m_newMedia.isOpen();
+}
 
 DeltaPatcher::PathCheck DeltaPatcher::checkPaths(const Fw::CmdStringArg& first,
                                                  const Fw::CmdStringArg& second,
@@ -103,165 +345,6 @@ bool DeltaPatcher::sameIdentity(const char* first, const char* second) {
 #endif
 }
 
-// ----------------------------------------------------------------------
-// Handler implementations for commands
-// ----------------------------------------------------------------------
-
-void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
-                                           U32 cmdSeq,
-                                           const Fw::CmdStringArg& old_file,
-                                           const Fw::CmdStringArg& patch_file,
-                                           const Fw::CmdStringArg& new_file) {
-    if (this->m_state == DeltaPatchState::PATCHING) {
-        this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::BUSY);
-        this->tlmWrite_LastStatus(DeltaPatchStatus::BUSY);
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
-        return;
-    }
-    // The old image is never written: refuse aliased paths before any file is
-    // opened. Paths are compared after textual resolution (`.`, `..`, duplicate
-    // separators, CWD) and, where the platform exposes file identity, by
-    // device/inode so hard links cannot slip past. Symbolic links and special files are refused by the media open.
-    const PathCheck check = DeltaPatcher::checkPaths(old_file, patch_file, new_file);
-    if (check != PATHS_DISTINCT) {
-        const DeltaPatchStatus status =
-            (check == PATHS_ALIASED) ? DeltaPatchStatus::SAME_FILE : DeltaPatchStatus::OPEN_FAILED;
-        this->log_WARNING_HI_PatchRejected(status);
-        this->tlmWrite_LastStatus(status);
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
-        return;
-    }
-    this->closeMedia();
-    this->m_codec.reset();
-
-    const bool newExisted = Os::FileSystem::exists(new_file.toChar());
-    bool opened = (this->m_oldMedia.open(old_file.toChar(), DeltaFileMedia::READ_ONLY) == Os::File::OP_OK);
-    opened = opened && (this->m_patchMedia.open(patch_file.toChar(), DeltaFileMedia::READ_ONLY) == Os::File::OP_OK);
-    opened = opened && (this->m_newMedia.open(new_file.toChar(), DeltaFileMedia::READ_WRITE) == Os::File::OP_OK);
-    if (!opened) {
-        this->closeMedia();
-        this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::OPEN_FAILED);
-        this->tlmWrite_LastStatus(DeltaPatchStatus::OPEN_FAILED);
-        this->m_state = DeltaPatchState::FAILED;
-        this->tlmWrite_State(this->m_state);
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
-        return;
-    }
-
-    const DeltaCodec::Status status = this->m_codec.begin(this->m_oldMedia, this->m_patchMedia, this->m_newMedia);
-    if (status != DeltaCodec::OP_OK) {
-        this->closeMedia();
-        this->m_codec.reset();
-        if (!newExisted) {
-            // A rejected header must not leave an empty output file behind
-            (void)Os::FileSystem::removeFile(new_file.toChar());
-        }
-        this->log_WARNING_HI_PatchRejected(DeltaPatcher::toStatus(status));
-        this->tlmWrite_LastStatus(DeltaPatcher::toStatus(status));
-        this->m_state = DeltaPatchState::FAILED;
-        this->tlmWrite_State(this->m_state);
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::EXECUTION_ERROR);
-        return;
-    }
-
-    this->m_newFile = new_file;
-    this->m_opCode = opCode;
-    this->m_cmdSeq = cmdSeq;
-    this->m_resumeReported = false;
-    this->m_state = DeltaPatchState::PATCHING;
-    this->log_ACTIVITY_HI_PatchStarted(patch_file, old_file, new_file, static_cast<U32>(this->m_codec.chunkCount()));
-    this->tlmWrite_State(this->m_state);
-    this->tlmWrite_ChunksTotal(static_cast<U32>(this->m_codec.chunkCount()));
-    this->tlmWrite_ChunksDone(0);
-    this->tlmWrite_BytesWritten(0);
-    // Command response is deferred until the patch completes or fails
-}
-
-void DeltaPatcher ::ABORT_PATCH_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
-    if (this->m_state != DeltaPatchState::PATCHING) {
-        this->log_WARNING_LO_AbortIgnored(this->m_state);
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
-        return;
-    }
-    this->log_ACTIVITY_HI_PatchAborted(static_cast<U32>(this->m_codec.chunkIndex()));
-    this->finish(DeltaPatchState::IDLE, DeltaPatchStatus::ABORTED, Fw::CmdResponse::EXECUTION_ERROR);
-    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
-}
-
-void DeltaPatcher ::APPLY_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) {
-    this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::BUSY);
-    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
-}
-
-void DeltaPatcher ::ABORT_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq) {
-    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::BUSY);
-}
-
-// ----------------------------------------------------------------------
-// Helpers
-// ----------------------------------------------------------------------
-
-void DeltaPatcher ::stepPatch() {
-    const DeltaCodec::Status status = this->m_codec.step();
-    this->tlmWrite_ChunksDone(static_cast<U32>(this->m_codec.chunkIndex()));
-    this->tlmWrite_BytesWritten(this->m_codec.bytesWritten());
-
-    switch (this->m_codec.state()) {
-        case DeltaCodec::PATCHING:
-            if (!this->m_resumeReported) {
-                this->m_resumeReported = true;
-                if (this->m_codec.resumedChunks() > 0) {
-                    this->log_ACTIVITY_HI_PatchResumed(this->m_newFile, static_cast<U32>(this->m_codec.resumedChunks()),
-                                                       static_cast<U32>(this->m_codec.chunkCount()));
-                }
-            }
-            break;
-        case DeltaCodec::COMPLETE: {
-            const U32 crc = this->m_codec.newCrc();
-            this->log_ACTIVITY_HI_PatchComplete(this->m_newFile, this->m_codec.newSize(), crc);
-            this->finish(DeltaPatchState::COMPLETE, DeltaPatchStatus::OP_OK, Fw::CmdResponse::OK);
-            if (this->isConnected_patchComplete_OutputPort(0)) {
-                this->patchComplete_out(0, this->m_newFile, crc);
-            }
-            break;
-        }
-        case DeltaCodec::FAILED: {
-            const DeltaPatchStatus reported = DeltaPatcher::toStatus(status);
-            if (status == DeltaCodec::OLD_IMAGE_MISMATCH) {
-                FwSizeType actualSize = 0;
-                (void)this->m_oldMedia.size(actualSize);
-                this->log_WARNING_HI_OldImageMismatch(this->m_codec.oldCrc(), this->m_codec.actualOldCrc(),
-                                                      this->m_codec.oldSize(), actualSize);
-            } else {
-                this->log_WARNING_HI_ChunkFailed(static_cast<U32>(this->m_codec.chunkIndex()), reported);
-            }
-            this->finish(DeltaPatchState::FAILED, reported, Fw::CmdResponse::EXECUTION_ERROR);
-            break;
-        }
-        case DeltaCodec::IDLE:
-        case DeltaCodec::VERIFY_NEW:
-        case DeltaCodec::VERIFY_OLD:
-        case DeltaCodec::VERIFY_FINAL:
-        default:
-            break;
-    }
-}
-
-void DeltaPatcher ::finish(DeltaPatchState state, DeltaPatchStatus status, Fw::CmdResponse response) {
-    this->m_codec.reset();
-    this->closeMedia();
-    this->m_state = state;
-    this->tlmWrite_State(this->m_state);
-    this->tlmWrite_LastStatus(status);
-    this->cmdResponse_out(this->m_opCode, this->m_cmdSeq, response);
-}
-
-void DeltaPatcher ::closeMedia() {
-    this->m_oldMedia.close();
-    this->m_patchMedia.close();
-    this->m_newMedia.close();
-}
-
 DeltaPatchStatus DeltaPatcher ::toStatus(DeltaCodec::Status status) {
     switch (status) {
         case DeltaCodec::OP_OK:
@@ -293,6 +376,28 @@ DeltaPatchStatus DeltaPatcher ::toStatus(DeltaCodec::Status status) {
         default:
             FW_ASSERT(0, static_cast<FwAssertArgType>(status));
             return DeltaPatchStatus::BAD_OPCODE;
+    }
+}
+
+DeltaPatchState DeltaPatcher ::toState(Update_DeltaPatchMachine::State state) {
+    switch (state) {
+        case Update_DeltaPatchMachine::State::IDLE:
+            return DeltaPatchState::IDLE;
+        case Update_DeltaPatchMachine::State::VERIFY_NEW:
+            return DeltaPatchState::VERIFY_NEW;
+        case Update_DeltaPatchMachine::State::VERIFY_OLD:
+            return DeltaPatchState::VERIFY_OLD;
+        case Update_DeltaPatchMachine::State::PATCHING:
+            return DeltaPatchState::PATCHING;
+        case Update_DeltaPatchMachine::State::VERIFY_FINAL:
+            return DeltaPatchState::VERIFY_FINAL;
+        case Update_DeltaPatchMachine::State::COMPLETE:
+            return DeltaPatchState::COMPLETE;
+        case Update_DeltaPatchMachine::State::FAILED:
+            return DeltaPatchState::FAILED;
+        default:
+            FW_ASSERT(0, static_cast<FwAssertArgType>(state));
+            return DeltaPatchState::IDLE;
     }
 }
 

@@ -35,12 +35,15 @@ module Update {
         SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
     }
 
-    @ State of the DeltaPatcher
+    @ State of the DeltaPatcher (mirrors the Update.DeltaPatchMachine states; values 0-3 predate the verify states)
     enum DeltaPatchState : U8 {
-        IDLE,
-        PATCHING,
-        FAILED,
-        COMPLETE
+        IDLE,         @< No patch bound
+        PATCHING,     @< Applying chunks
+        FAILED,       @< Last patch failed; output retained for resume
+        COMPLETE,     @< Last patch produced and verified the new image
+        VERIFY_NEW,   @< Resume: CRC-checking chunks already present in the new image
+        VERIFY_OLD,   @< CRC-checking the old image against the header
+        VERIFY_FINAL  @< Reading the flushed new image back and checking its CRC
     }
 
     @ Port used to report a status back from a given update action

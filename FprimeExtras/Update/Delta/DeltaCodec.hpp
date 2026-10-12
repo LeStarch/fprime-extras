@@ -18,18 +18,21 @@ namespace Update {
 //! \brief Allocation-free, bounded-step SPatch v2 engine
 //!
 //! Applies an SPatch (format: FprimeExtras/Update/DeltaPatcher/docs/sdd.md) held in `patch` media to the `oldImage`
-//! media producing the `newImage` media. Work is performed in step() calls, each bounded to one chunk (or
-//! DELTA_VERIFY_BYTES_PER_STEP bytes of CRC verification), so the engine may be driven from a rate group. All storage
-//! is fixed: three buffers sized by DeltaCodecConfig.hpp plus scalar state.
+//! media producing the `newImage` media. The engine is the work delegate of the Update.DeltaPatchMachine state
+//! machine: it owns no lifecycle state of its own. The caller runs the stages in order — begin(), then verifyNew()
+//! (if hasOutputToVerify()), verifyOld(), patchChunk(), verifyFinal() — calling each stage function once per tick
+//! until it reports STAGE_DONE. Each call is bounded to one chunk (or DELTA_VERIFY_BYTES_PER_STEP bytes of CRC
+//! verification) and at most DELTA_MAX_IO_PER_STEP media accesses, so the engine may be driven from a rate group.
+//! All storage is fixed: four buffers sized by DeltaCodecConfig.hpp plus the state structs below.
 //!
 //! Resume: chunks already present in the new image media are CRC-verified and skipped, so an interrupted patch
 //! restarts from the first missing or corrupt chunk with no persisted engine state.
 //!
-//! Completion: after the last chunk the new image media is flushed and read back in full; COMPLETE is reached only
-//! when the stored size and CRC match the header.
+//! Completion: after the last chunk the new image media is flushed and read back in full; verifyFinal() reports
+//! STAGE_DONE only when the stored size and CRC match the header.
 class DeltaCodec final {
   public:
-    //! Outcome of begin()/step(); mirrors Update.DeltaPatchStatus
+    //! Outcome of a stage call; mirrors Update.DeltaPatchStatus
     enum Status {
         OP_OK,
         BAD_HEADER,           //!< Magic, version, flags, CRC, or geometry of the SPatch
@@ -52,16 +55,10 @@ class DeltaCodec final {
                               //!< FwSizeType width than this build's
     };
 
-    //! Engine state
-    enum State {
-        IDLE,
-        VERIFY_NEW,  //!< Verifying chunks already present in the new image (resume)
-        VERIFY_OLD,  //!< Verifying the old image CRC
-        PATCHING,
-        VERIFY_FINAL,  //!< Reading the flushed new image back and checking its CRC
-                       //!< before reporting COMPLETE
-        COMPLETE,
-        FAILED
+    //! Progress of a stage after one bounded unit of work
+    enum StepResult {
+        IN_PROGRESS,  //!< The stage has more work; call again next tick
+        STAGE_DONE    //!< The stage is complete; advance to the next stage
     };
 
     //! SPatch v2 constants. Integers are F Prime serialized (big-endian); sizes are FwSizeType, whose width is recorded
@@ -91,39 +88,84 @@ class DeltaCodec final {
     DeltaCodec(const DeltaCodec&) = delete;
     DeltaCodec& operator=(const DeltaCodec&) = delete;
 
-    //! Replace the coder (project plugin seam); only permitted while IDLE
+    //! Replace the coder (project plugin seam); only permitted while no media is bound (before begin() or after
+    //! reset())
     void setCoder(DeltaCoder& coder);
 
-    //! \brief Read and validate the header, size the resume, and enter the first verify state
+    //! \brief Bind the media, read and validate the header, and size the resume
     //!
-    //! Media must remain open until the engine reaches COMPLETE or FAILED or reset() is called.
+    //! Media must remain bound until the caller has finished the stages or calls reset().
     Status begin(DeltaMedia& oldImage, DeltaMedia& patch, DeltaMedia& newImage);
 
-    //! \brief Perform one bounded unit of work
-    //!
-    //! Returns OP_OK while progressing (including on reaching COMPLETE); any other value sets state FAILED.
-    Status step();
+    //! True when the existing new image holds whole chunks that verifyNew() must check before patching (resume)
+    bool hasOutputToVerify() const { return this->m_progress.verifyChunks > 0; }
 
-    //! Return to IDLE, forgetting media
+    //! \brief Stage 1 (resume only): CRC-verify up to DELTA_VERIFY_BYTES_PER_STEP bytes of the existing new image
+    //!
+    //! Chunks whose stored bytes match the chunk CRC in the patch are skipped; the first chunk that does not match
+    //! (or cannot be read) is where patching restarts.
+    Status verifyNew(StepResult& result);
+
+    //! Stage 2: CRC-verify up to DELTA_VERIFY_BYTES_PER_STEP bytes of the old image against the header
+    Status verifyOld(StepResult& result);
+
+    //! \brief Stage 3: apply one chunk (or the slice of it the I/O budget allows)
+    //!
+    //! After the last chunk, checks that the patch holds no trailing bytes and that the committed output CRC
+    //! matches the header, then flushes and re-resolves the new image and reports STAGE_DONE.
+    Status patchChunk(StepResult& result);
+
+    //! Stage 4: read back up to DELTA_VERIFY_BYTES_PER_STEP bytes of the stored new image; STAGE_DONE only when the
+    //! stored size and CRC match the header
+    Status verifyFinal(StepResult& result);
+
+    //! Forget the media and all progress
     void reset();
 
-    State state() const { return this->m_state; }
-    Status lastStatus() const { return this->m_lastStatus; }
-    FwSizeType chunkIndex() const { return this->m_chunkIndex; }
-    FwSizeType chunkCount() const { return this->m_chunkCount; }
-    FwSizeType resumedChunks() const { return this->m_resumedChunks; }
+    FwSizeType chunkIndex() const { return this->m_progress.chunkIndex; }
+    FwSizeType chunkCount() const { return this->m_header.chunkCount; }
+    FwSizeType resumedChunks() const { return this->m_progress.resumedChunks; }
     FwSizeType bytesWritten() const;
-    FwSizeType oldSize() const { return this->m_oldSize; }
-    U32 oldCrc() const { return this->m_oldCrc; }
-    U32 actualOldCrc() const { return this->m_verifyCrc; }
-    FwSizeType newSize() const { return this->m_newSize; }
-    U32 newCrc() const { return this->m_newCrc; }
+    FwSizeType oldSize() const { return this->m_header.oldSize; }
+    U32 oldCrc() const { return this->m_header.oldCrc; }
+    //! CRC computed over the old image by verifyOld(); valid once that stage has reported
+    U32 actualOldCrc() const { return this->m_verify.crc; }
+    FwSizeType newSize() const { return this->m_header.newSize; }
+    U32 newCrc() const { return this->m_header.newCrc; }
 
   private:
     enum Op : U8 { OP_COPY = 0, OP_ADD = 1, OP_LIT = 2, OP_SEEK = 3 };
 
-    //! Per-chunk working set; lives on the stack for the duration of one step()
+    //! Geometry declared by the SPatch header (plus the patch media size); fixed for the life of one patch
+    struct Header {
+        FwSizeType oldSize;     //!< Old image size
+        U32 oldCrc;             //!< Old image CRC32
+        FwSizeType newSize;     //!< New image size
+        U32 newCrc;             //!< New image CRC32
+        FwSizeType chunkBytes;  //!< Output bytes per chunk (last chunk may be shorter)
+        FwSizeType chunkCount;  //!< ceil(newSize / chunkBytes)
+        FwSizeType patchSize;   //!< Size of the patch media at begin()
+    };
+
+    //! Position through the patch; advances only at chunk boundaries
+    struct Progress {
+        FwSizeType chunkIndex;     //!< Next chunk to verify or apply
+        FwSizeType patchPos;       //!< Media offset of the next chunk header
+        FwSizeType resumedChunks;  //!< Chunks skipped because the existing output verified
+        FwSizeType verifyChunks;   //!< Chunks of existing output to verify on resume
+        U32 runningCrc;            //!< New image CRC including the chunk in progress
+        U32 committedCrc;          //!< New image CRC through the last accepted chunk
+    };
+
+    //! Region under CRC verification (existing output, old image, or final read-back)
+    struct VerifySpan {
+        FwSizeType offset;  //!< Next byte to read
+        U32 crc;            //!< Running CRC of the bytes read so far
+    };
+
+    //! Chunk in progress; persists across ticks when the I/O budget is exhausted
     struct Chunk {
+        bool active;                //!< A chunk header has been read and the chunk is partially applied
         FwSizeType codedLength;     //!< Coded payload bytes declared by the chunk header
         FwSizeType codedRemaining;  //!< Coded payload bytes not yet read from media
         FwSizeType patchFill;       //!< Valid bytes in the patch buffer
@@ -144,18 +186,28 @@ class DeltaCodec final {
                                     //!< DELTA_MAX_OPS_PER_CHUNK
     };
 
-    Status fail(Status status);
+    //! Old-image bytes held in m_oldBuffer so short adjacent COPY/ADD operations share one media read
+    struct OldCache {
+        FwSizeType offset;  //!< Old-image offset of m_oldBuffer[0]
+        FwSizeType length;  //!< Valid bytes in m_oldBuffer (0 when empty)
+    };
+
+    //! Most passes a verification stage makes per call: each pass CRCs at least one byte of the budget
+    static constexpr FwSizeType MAX_VERIFY_PASSES = DELTA_VERIFY_BYTES_PER_STEP;
+
+    //! Read and validate the SPatch header into m_header
+    Status readHeader(DeltaMedia& patch);
     //! Classify a failed media read: the documented mismatch status when the
     //! media no longer has the size captured at begin(), READ_ERROR otherwise
     Status readFailure(DeltaMedia& media, FwSizeType expectedSize, Status mismatch);
     Status readChunkHeader(FwSizeType& codedLength, U32& crc);
-    Status verifyNewStep();
-    Status verifyOldStep();
-    Status patchChunk();
+    //! Verify one slice (at most `budget` bytes, one media read) of `media` into m_verify
+    Status verifySlice(DeltaMedia& media, FwSizeType regionStart, FwSizeType regionLength, FwSizeType& budget);
+    //! Abandon the chunk in progress and report `status`
+    Status failChunk(Status status);
     Status beginChunk();
     Status finishChunk();
-    Status finish();
-    Status verifyFinalStep();
+    Status finishImage(StepResult& result);
     Status fillWindow(Chunk& chunk);
     Status parseOp(Chunk& chunk);
     Status executeOp(Chunk& chunk);
@@ -177,30 +229,12 @@ class DeltaCodec final {
     U8 m_outBuffer[DELTA_OUTPUT_BUFFER_SIZE];
     U8 m_oldBuffer[DELTA_OLD_BUFFER_SIZE];
     DeltaWindow m_window;
-    Chunk m_chunk;                //!< Chunk in progress; persists across steps when the I/O
-                                  //!< budget is exhausted
-    bool m_chunkActive;           //!< m_chunk holds a partially applied chunk
-    FwSizeType m_oldCacheOffset;  //!< Old-image offset of m_oldBuffer[0]
-    FwSizeType m_oldCacheLength;  //!< Valid bytes in m_oldBuffer (0 when empty)
-    FwSizeType m_ioCount;         //!< Media reads and writes issued in the current step
-
-    State m_state;
-    Status m_lastStatus;
-    FwSizeType m_oldSize;
-    U32 m_oldCrc;
-    FwSizeType m_newSize;
-    U32 m_newCrc;
-    FwSizeType m_chunkCount;
-    FwSizeType m_chunkBytes;
-    FwSizeType m_chunkIndex;
-    FwSizeType m_resumedChunks;
-    FwSizeType m_verifyChunks;  //!< Chunks of existing output to verify on resume
-    FwSizeType m_patchSize;
-    FwSizeType m_patchPos;  //!< Media offset of the next chunk header
-    FwSizeType m_verifyOffset;
-    U32 m_verifyCrc;     //!< Running CRC of the region under verification
-    U32 m_runningCrc;    //!< New image CRC including the chunk in progress
-    U32 m_committedCrc;  //!< New image CRC through the last accepted chunk
+    Header m_header;
+    Progress m_progress;
+    VerifySpan m_verify;
+    Chunk m_chunk;
+    OldCache m_oldCache;
+    FwSizeType m_ioCount;  //!< Media reads and writes issued in the current stage call
 };
 
 }  // namespace Update

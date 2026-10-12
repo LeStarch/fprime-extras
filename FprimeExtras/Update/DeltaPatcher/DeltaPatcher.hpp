@@ -9,20 +9,23 @@
 #define Update_DeltaPatcher_HPP
 
 #include "FprimeExtras/Update/Delta/DeltaCodec.hpp"
+#include "FprimeExtras/Update/Delta/DeltaCoderLzss.hpp"
 #include "FprimeExtras/Update/DeltaPatcher/DeltaPatcherComponentAc.hpp"
 
 namespace Update {
 
-//! \brief Applies SPatch delta files to on-board images, one bounded step per rate-group tick
+//! \brief Applies SPatch delta files to on-board images, one bounded unit of work per rate-group tick
 //!
-//! All handlers execute on the caller of `run` (commands are dispatched from the queue there), so no locking is needed
-//! and the engine's fixed buffers are the only patch-time storage. The shipped LZSS coder is used unless a project
-//! supplies its own via `setCoder()` during topology setup, before rate groups start.
+//! The lifecycle is the DeltaPatchMachine state machine; its `tick` actions delegate the work to the DeltaCodec and
+//! its transitions report events, telemetry and the deferred APPLY_PATCH response. All handlers and actions execute
+//! on the caller of `run` (the queue is dispatched there), so no locking is needed and the engine's fixed buffers
+//! are the only patch-time storage. The shipped LZSS coder is used unless a project supplies its own via
+//! `setCoder()` during topology setup, before rate groups start.
 class DeltaPatcher final : public DeltaPatcherComponentBase {
     friend class DeltaPatcherTester;
 
   public:
-    //! Upper bound on queued messages dispatched per `run` tick
+    //! Upper bound on queued messages dispatched per drain; `run` drains twice (before and after sending `tick`)
     static constexpr FwSizeType MAX_DISPATCH_PER_TICK = 4;
 
     //! Construct DeltaPatcher object
@@ -45,7 +48,7 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
 
     //! Handler implementation for run
     //!
-    //! Rate-group tick: dispatches queued commands, then performs one bounded step of patch work
+    //! Rate-group tick: drains the queue, sends `tick` to the state machine, and drains the queue again
     void run_handler(FwIndexType portNum,  //!< The port number
                      U32 context           //!< The call order
                      ) override;
@@ -81,17 +84,119 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
 
   private:
     // ----------------------------------------------------------------------
+    // Implementations for internal state machine actions
+    // ----------------------------------------------------------------------
+
+    //! Implementation for action doVerifyNew of state machine Update_DeltaPatchMachine
+    //!
+    //! Delegate one unit of resume verification to DeltaCodec::verifyNew()
+    void Update_DeltaPatchMachine_action_doVerifyNew(SmId smId,                               //!< The state machine id
+                                                     Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                     ) override;
+
+    //! Implementation for action doVerifyOld of state machine Update_DeltaPatchMachine
+    //!
+    //! Delegate one unit of old-image verification to DeltaCodec::verifyOld()
+    void Update_DeltaPatchMachine_action_doVerifyOld(SmId smId,                               //!< The state machine id
+                                                     Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                     ) override;
+
+    //! Implementation for action doPatchChunk of state machine Update_DeltaPatchMachine
+    //!
+    //! Delegate one chunk (or I/O-budget slice) to DeltaCodec::patchChunk()
+    void Update_DeltaPatchMachine_action_doPatchChunk(SmId smId,                               //!< The state machine id
+                                                      Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                      ) override;
+
+    //! Implementation for action doVerifyFinal of state machine Update_DeltaPatchMachine
+    //!
+    //! Delegate one unit of read-back verification to DeltaCodec::verifyFinal()
+    void Update_DeltaPatchMachine_action_doVerifyFinal(SmId smId,  //!< The state machine id
+                                                       Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                       ) override;
+
+    //! Implementations for the per-state entry actions tlmVerifyNew / tlmVerifyOld / tlmPatching / tlmVerifyFinal /
+    //! tlmComplete / tlmFailed of state machine Update_DeltaPatchMachine
+    //!
+    //! Report the state just entered on the State telemetry channel
+    void Update_DeltaPatchMachine_action_tlmVerifyNew(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_tlmVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_tlmPatching(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_tlmVerifyFinal(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_tlmComplete(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_tlmFailed(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+
+    //! Implementation for action reportResumed of state machine Update_DeltaPatchMachine
+    //!
+    //! Emit PatchResumed when verified chunks were skipped
+    void Update_DeltaPatchMachine_action_reportResumed(SmId smId,  //!< The state machine id
+                                                       Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                       ) override;
+
+    //! Implementation for action reportComplete of state machine Update_DeltaPatchMachine
+    //!
+    //! Emit PatchComplete, invoke patchComplete, answer APPLY_PATCH OK
+    void Update_DeltaPatchMachine_action_reportComplete(SmId smId,  //!< The state machine id
+                                                        Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                        ) override;
+
+    //! Implementation for action reportFailed of state machine Update_DeltaPatchMachine
+    //!
+    //! Emit OldImageMismatch or ChunkFailed, answer APPLY_PATCH EXECUTION_ERROR
+    void Update_DeltaPatchMachine_action_reportFailed(SmId smId,  //!< The state machine id
+                                                      Update_DeltaPatchMachine::Signal signal,  //!< The signal
+                                                      const Update::DeltaPatchStatus& value     //!< The value
+                                                      ) override;
+
+    //! Implementation for action reportAborted of state machine Update_DeltaPatchMachine
+    //!
+    //! Emit PatchAborted, answer APPLY_PATCH EXECUTION_ERROR and ABORT_PATCH OK, report IDLE
+    void Update_DeltaPatchMachine_action_reportAborted(SmId smId,  //!< The state machine id
+                                                       Update_DeltaPatchMachine::Signal signal,  //!< The signal
+                                                       const Update::DeltaAbortRequest& value    //!< The value
+                                                       ) override;
+
+    //! Implementation for action doRelease of state machine Update_DeltaPatchMachine
+    //!
+    //! Close the media and forget the codec progress
+    void Update_DeltaPatchMachine_action_doRelease(SmId smId,                               //!< The state machine id
+                                                   Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                   ) override;
+
+  private:
+    // ----------------------------------------------------------------------
+    // Implementations for internal state machine guards
+    // ----------------------------------------------------------------------
+
+    //! Implementation for guard hasOutputToVerify of state machine Update_DeltaPatchMachine
+    //!
+    //! True when the existing new file holds whole chunks to CRC-verify before patching (resume)
+    bool Update_DeltaPatchMachine_guard_hasOutputToVerify(SmId smId,  //!< The state machine id
+                                                          Update_DeltaPatchMachine::Signal signal  //!< The signal
+    ) const override;
+
+  private:
+    // ----------------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------------
 
-    //! Advance the engine by one step and report state transitions
-    void stepPatch();
+    //! Dispatch up to MAX_DISPATCH_PER_TICK queued messages
+    void drainQueue();
 
-    //! Finish the in-progress patch: report status, close media, respond to APPLY_PATCH
-    void finish(DeltaPatchState state, DeltaPatchStatus status, Fw::CmdResponse response);
+    //! Publish progress telemetry and turn a delegate result into a stageDone / fail signal
+    void reportStep(DeltaCodec::Status status, DeltaCodec::StepResult result);
+
+    //! Reject APPLY_PATCH before a patch is bound
+    void rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatus status, Fw::CmdResponse response);
+
+    //! Answer the pending APPLY_PATCH and record its outcome
+    void completePending(DeltaPatchStatus status, Fw::CmdResponse response);
 
     //! Close all media
     void closeMedia();
+
+    //! True while a patch is bound to the media (APPLY_PATCH accepted and not yet released)
+    bool isPatchBound() const;
 
     //! True when the three paths resolve (textually, via Os::FilePathUtils) to three different files
     enum PathCheck {
@@ -114,21 +219,27 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Map an engine status onto the reported status enumeration
     static DeltaPatchStatus toStatus(DeltaCodec::Status status);
 
+    //! Map a state-machine state onto the reported state enumeration
+    static DeltaPatchState toState(Update_DeltaPatchMachine::State state);
+
   private:
     // ----------------------------------------------------------------------
     // Member variables
     // ----------------------------------------------------------------------
 
+    //! The APPLY_PATCH whose response is deferred until the patch completes, fails or is aborted
+    struct PendingCommand {
+        FwOpcodeType opCode;  //!< Opcode of the in-progress APPLY_PATCH
+        U32 cmdSeq;           //!< Sequence of the in-progress APPLY_PATCH
+        Fw::String newFile;   //!< Output path, reported on completion
+    };
+
     DeltaCoderLzss m_defaultCoder;  //!< Shipped coder, used unless setCoder() is called
-    DeltaCodec m_codec;             //!< Streaming SPatch engine (owns all patch-time buffers)
+    DeltaCodec m_codec;             //!< Streaming SPatch engine (owns all patch-time buffers); the machine's delegate
     DeltaFileMedia m_oldMedia;      //!< Old image (read only)
     DeltaFileMedia m_patchMedia;    //!< Patch file (read only)
     DeltaFileMedia m_newMedia;      //!< New image (read/write for resume)
-    Fw::String m_newFile;           //!< Output path, reported on completion
-    FwOpcodeType m_opCode;          //!< Opcode of the in-progress APPLY_PATCH
-    U32 m_cmdSeq;                   //!< Sequence of the in-progress APPLY_PATCH
-    DeltaPatchState m_state;        //!< Reported state
-    bool m_resumeReported;          //!< PatchResumed emitted for the current patch
+    PendingCommand m_pending;       //!< Deferred APPLY_PATCH
 };
 
 }  // namespace Update

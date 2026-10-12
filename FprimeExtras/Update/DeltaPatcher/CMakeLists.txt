@@ -8,6 +8,7 @@
 
 register_fprime_library(
     AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaPatchMachine.fpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaPatcher.fpp"
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/DeltaPatcher.cpp"
@@ -17,6 +18,7 @@ register_fprime_library(
 
 register_fprime_ut(
     AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaPatchMachine.fpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaPatcher.fpp"
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaPatcherTestMain.cpp"
