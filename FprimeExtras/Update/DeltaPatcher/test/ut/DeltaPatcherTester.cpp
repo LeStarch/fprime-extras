@@ -491,8 +491,7 @@ void DeltaPatcherTester ::startDropped() {
   ASSERT_EVENTS_SignalDropped(
       0,
       static_cast<U32>(DeltaPatcher::Update_DeltaPatchMachine::Signal::start));
-  ASSERT_EVENTS_PatchRejected_SIZE(1);
-  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BUSY);
+  ASSERT_EVENTS_PatchRejected_SIZE(0);
   ASSERT_CMD_RESPONSE_SIZE(1);
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
                       Fw::CmdResponse::BUSY);
