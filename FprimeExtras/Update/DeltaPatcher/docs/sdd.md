@@ -18,6 +18,14 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 | DP-007 | The decompression coder shall be replaceable by the project (`setCoder`). | Inspection, UT |
 | DP-008 | `APPLY_PATCH` shall complete `OK` only after the new image is fully written and verified. | UT |
 | DP-009 | A second `APPLY_PATCH` while patching shall be rejected with `BUSY`. | UT `Busy` |
+| DP-011 | The patch lifecycle shall be modeled as an FPP state machine whose actions delegate bounded work to the engine. | `DeltaPatchMachine.fpp`, UT `Nominal`, `AbortAndResume` |
+| DP-012 | Each validator shall document the byte layout it validates. | `DeltaCodec.cpp`, `DeltaCoder*.cpp` |
+| DP-013 | Each shipped coder shall live in its own source files; the interface file shall hold no implementation. | `Delta/CMakeLists.txt` |
+| DP-014 | Flight code shall contain no `while` loops; every loop shall carry an explicit bound. | code inspection, UT `BoundedStep` |
+| DP-015 | Persistent engine and component state shall be grouped in named structs. | `DeltaCodec.hpp`, `DeltaPatcher.hpp` |
+| DP-016 | The `State` channel shall report the verification stages. | UT `Nominal`, int `test_apply_patch_nominal` |
+| DP-017 | `ABORT_PATCH` shall be answered after the abort has taken effect, following the aborted `APPLY_PATCH` response. | UT `AbortAndResume` |
+| DP-018 | All three shipped coders shall be exercised on real deployment images. | int `test_ref_variants.py` |
 | DP-010 | `ABORT_PATCH` shall stop patching and retain the partial output for resume. | UT `AbortAndResume` |
 
 ## Design
@@ -31,9 +39,45 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
                             |    DeltaMedia x3 (Os::File; flash region later)
 ```
 
-* **Queued component.** `run_handler` dispatches at most `MAX_DISPATCH_PER_TICK` queued messages and then, if
-  patching, performs exactly one `DeltaCodec::step()`. A step verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes
-  or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
+* **State machine.** The patch lifecycle is the FPP state machine `Update.DeltaPatchMachine`
+  (`DeltaPatchMachine.fpp`), instanced as `deltaPatchMachine`:
+
+  ```
+  IDLE --start--> [hasOutputToVerify] --yes--> VERIFY_NEW --stageDone--> VERIFY_OLD --stageDone--> PATCHING
+                                       --no--> VERIFY_OLD                                              |
+  VERIFY_FINAL <--stageDone-------------------------------------------------------------------------------+
+     | stageDone -> COMPLETE          any working state: fail(status) -> FAILED, abort -> IDLE
+  COMPLETE / FAILED / IDLE --start--> (resume choice)     IDLE / COMPLETE / FAILED --reject--> FAILED
+  ```
+
+  Each working state handles `tick` with one delegate action (`doVerifyNew`, `doVerifyOld`, `doPatchChunk`,
+  `doVerifyFinal`) that calls the matching `DeltaCodec` stage function once and translates its `Status` /
+  `StepResult` into a `stageDone` or `fail` signal (`reportStep`). Transition actions own the reporting:
+  `reportResumed` (VERIFY_NEW→VERIFY_OLD), `reportComplete` (VERIFY_FINAL→COMPLETE), `reportFailed: DeltaPatchStatus`,
+  `reportAborted: DeltaAbortRequest` (answers both the pending `APPLY_PATCH` and the `ABORT_PATCH` that caused it);
+  entry actions `tlm*` publish `State`, and `doRelease` on entry to COMPLETE/FAILED (and on abort) closes the media and
+  resets the engine. The component therefore keeps no lifecycle state of its own: "busy" is "media bound"
+  (`isPatchBound()`), and the only other persistent member is the `PendingCommand` struct holding the deferred
+  `APPLY_PATCH` response. `APPLY_PATCH` validates paths, opens media and runs `DeltaCodec::begin()` on the command
+  thread; failures there are answered immediately (`PatchRejected`) and `reject` moves the machine to FAILED.
+* **Delegate (engine).** `DeltaCodec` owns no lifecycle either: its public surface is `begin()`,
+  `hasOutputToVerify()`, `verifyNew()`, `verifyOld()`, `patchChunk()`, `verifyFinal()` and `reset()`, each stage call
+  doing one bounded unit of work and reporting `IN_PROGRESS` or `STAGE_DONE`. Its state is five structs — `Header`
+  (geometry from the SPatch header), `Progress` (chunk index, patch position, resume counts, committed/running CRC),
+  `VerifySpan` (region under CRC check), `Chunk` (the chunk in flight, including the parsed operation) and
+  `OldCache` — plus four fixed buffers. Every loop is a bounded `for`: verification passes are capped by
+  `MAX_VERIFY_PASSES` (each pass CRCs at least one byte of the per-step budget), chunk passes by
+  `DELTA_MAX_OPS_PER_CHUNK + chunk_bytes`, window fills by the window space, varint reads by 5 bytes. Each validator
+  (`readHeader`, `readChunkHeader`, `readVarint`, `parseOp`, and the coders' `decode`) is preceded by a comment
+  drawing the exact byte layout it checks.
+* **Coders.** `DeltaCoder.hpp` is the pure interface; the shipped implementations live one per file:
+  `DeltaCoderNone`, `DeltaCoderRle`, `DeltaCoderLzss` (`.hpp`/`.cpp`), each holding its partial-token state in a
+  `Token` struct and documenting its payload layout at the top of `decode()`.
+* **Queued component.** `run_handler` drains at most `MAX_DISPATCH_PER_TICK` queued messages (commands and signals
+  left from the previous tick), sends `tick`, and drains again so the tick's work and the transition it produces
+  complete within the same tick; the instance queue (`UpdateConfig.QueueSizes.deltaPatcher`, 8) is sized for
+  `2 * MAX_DISPATCH_PER_TICK` so a burst of commands cannot leave the state-machine signals without room. A tick
+  verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
   with `BAD_HEADER`/`BAD_OPCODE`. Because a coder may expand its input (LZSS up to 129:1), the decoded operation
   stream is additionally bounded by construction: a `SEEK` must be followed by a producing op, so a chunk never
@@ -184,7 +228,7 @@ possible without touching the patch payload.
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `State` | `DeltaPatchState` | IDLE / PATCHING / FAILED / COMPLETE |
+| `State` | `DeltaPatchState` | IDLE / VERIFY_NEW / VERIFY_OLD / PATCHING / VERIFY_FINAL / COMPLETE / FAILED (the `DeltaPatchMachine` state) |
 | `ChunksDone` | U32 | Chunks verified or written |
 | `ChunksTotal` | U32 | Chunk count from header |
 | `BytesWritten` | FwSizeType | New-image bytes written or verified so far (chunk granularity) |
