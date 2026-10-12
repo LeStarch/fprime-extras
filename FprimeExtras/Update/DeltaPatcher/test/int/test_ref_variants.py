@@ -118,5 +118,7 @@ def test_variant_patch(fprime_test_api, images, size_width, uplink, coder_name, 
     assert len(produced) == len(new)
     assert produced == new
     assert event.get_args()[2].val == (zlib.crc32(new) & 0xFFFFFFFF)
+    # State passes through the verify/patch states on every patch, so COMPLETE is re-downlinked each time.
+    # LastStatus is an update-on-change channel: a second OP_OK in the same process is never sent again, so it
+    # is not asserted here; the PatchComplete event plus the byte-exact output and CRC above are the outcome check.
     fprime_test_api.assert_telemetry(patcher(fprime_test_api, "State"), "COMPLETE", timeout=10)
-    fprime_test_api.assert_telemetry(patcher(fprime_test_api, "LastStatus"), "OP_OK", timeout=10)
