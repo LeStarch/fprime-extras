@@ -303,6 +303,17 @@ void DeltaPatcherTester ::chunkFailed() {
   ASSERT_TLM_State(this->tlmHistory_State->size() - 1,
                    DeltaPatchState::COMPLETE);
   ASSERT_EQ(readFile(this->m_new).size(), NEW_IMAGE_SIZE);
+
+  // A rejected re-apply after success: COMPLETE --reject--> FAILED, output kept
+  const U8 garbage[16] = {0};
+  writeFile(this->m_patch, garbage, sizeof(garbage));
+  this->clearHistory();
+  this->apply(4);
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BAD_HEADER);
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::FAILED);
+  ASSERT_EQ(readFile(this->m_new).size(), NEW_IMAGE_SIZE);
 }
 
 void DeltaPatcherTester ::abortAndResume() {
@@ -442,10 +453,16 @@ void DeltaPatcherTester ::signalOverflow() {
       FAIL() << "unexpected abort response " << response.response;
     }
   }
-  ASSERT_EQ(ignored + busy, TEST_INSTANCE_QUEUE_DEPTH - 1);
+  // Every abort signal fits (its command dispatch freed a slot first); only the
+  // tick of the first run finds the queue full
+  ASSERT_EQ(busy, 0u);
+  ASSERT_EQ(ignored, TEST_INSTANCE_QUEUE_DEPTH - 1);
   ASSERT_EVENTS_PatchAborted_SIZE(1);
   ASSERT_EVENTS_AbortIgnored_SIZE(ignored);
-  ASSERT_GE(this->eventHistory_SignalDropped->size(), 1u);
+  ASSERT_EVENTS_SignalDropped_SIZE(1);
+  ASSERT_EVENTS_SignalDropped(
+      0,
+      static_cast<U32>(DeltaPatcher::Update_DeltaPatchMachine::Signal::tick));
   ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
   // Further ticks are quiet and the patcher accepts a new patch
   this->clearHistory();
@@ -455,6 +472,112 @@ void DeltaPatcherTester ::signalOverflow() {
   this->runUntilResponse();
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 20,
                       Fw::CmdResponse::OK);
+}
+
+void DeltaPatcherTester ::startDropped() {
+  // Queue full of ABORT_PATCH when APPLY_PATCH is dispatched: the start signal
+  // is dropped, so the hook must unbind the patch and answer the command
+  for (U32 seq = 10; seq < 10 + TEST_INSTANCE_QUEUE_DEPTH; seq++) {
+    this->sendCmd_ABORT_PATCH(0, seq);
+  }
+  ASSERT_CMD_RESPONSE_SIZE(0);
+  this->component.APPLY_PATCH_cmdHandler(
+      DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+      Fw::CmdStringArg(this->m_old.c_str()),
+      Fw::CmdStringArg(this->m_patch.c_str()),
+      Fw::CmdStringArg(this->m_new.c_str()));
+  ASSERT_EVENTS_PatchStarted_SIZE(1);
+  ASSERT_EVENTS_SignalDropped_SIZE(1);
+  ASSERT_EVENTS_SignalDropped(
+      0,
+      static_cast<U32>(DeltaPatcher::Update_DeltaPatchMachine::Signal::start));
+  ASSERT_EVENTS_PatchRejected_SIZE(1);
+  ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BUSY);
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::BUSY);
+  ASSERT_FALSE(this->component.isPatchBound());
+  ASSERT_TLM_LastStatus(this->tlmHistory_LastStatus->size() - 1,
+                        DeltaPatchStatus::BUSY);
+  // The queued aborts are answered as ignored, then a fresh patch runs to
+  // completion
+  this->clearHistory();
+  for (U32 i = 0;
+       i <
+       2 * TEST_INSTANCE_QUEUE_DEPTH / DeltaPatcher::MAX_DISPATCH_PER_TICK + 1;
+       i++) {
+    this->invoke_to_run(0, 0);
+  }
+  ASSERT_CMD_RESPONSE_SIZE(TEST_INSTANCE_QUEUE_DEPTH);
+  ASSERT_EVENTS_AbortIgnored_SIZE(TEST_INSTANCE_QUEUE_DEPTH);
+  this->clearHistory();
+  this->apply(2);
+  this->runUntilResponse();
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 2,
+                      Fw::CmdResponse::OK);
+  ASSERT_EVENTS_PatchComplete_SIZE(1);
+}
+
+void DeltaPatcherTester ::hookAnswersDroppedAbort() {
+  // Drive the overflow hook directly with an abort payload: the ABORT_PATCH it
+  // carries must be answered BUSY from the hook
+  U8 storage[DeltaAbortRequest::SERIALIZED_SIZE];
+  Fw::ExternalSerializeBuffer buffer(storage, sizeof(storage));
+  const DeltaAbortRequest request(DeltaPatcher::OPCODE_ABORT_PATCH, 7);
+  ASSERT_EQ(buffer.serializeFrom(request), Fw::FW_SERIALIZE_OK);
+  this->component.deltaPatchMachine_stateMachineOverflowHook(
+      DeltaPatcher::SmId::deltaPatchMachine,
+      static_cast<FwEnumStoreType>(
+          DeltaPatcher::Update_DeltaPatchMachine::Signal::abort),
+      buffer);
+  ASSERT_EVENTS_SignalDropped_SIZE(1);
+  ASSERT_EVENTS_SignalDropped(
+      0,
+      static_cast<U32>(DeltaPatcher::Update_DeltaPatchMachine::Signal::abort));
+  ASSERT_CMD_RESPONSE_SIZE(1);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_ABORT_PATCH, 7,
+                      Fw::CmdResponse::BUSY);
+}
+
+void DeltaPatcherTester ::abortOvertakenByCompletion() {
+  // An ABORT_PATCH dispatched in the same drain as the tick that completes
+  // read-back: the abort signal reaches the machine in COMPLETE and must be
+  // answered from there
+  this->apply(1);
+  for (U32 i = 0;
+       i < MAX_TICKS &&
+       this->component.deltaPatchMachine_getState() !=
+           DeltaPatcher::Update_DeltaPatchMachine::State::VERIFY_FINAL;
+       i++) {
+    this->invoke_to_run(0, 0);
+  }
+  ASSERT_EQ(this->component.deltaPatchMachine_getState(),
+            DeltaPatcher::Update_DeltaPatchMachine::State::VERIFY_FINAL);
+  // Eight inert APPLY_PATCH (rejected BUSY) occupy both drains of one run, so
+  // its tick stays queued
+  for (U32 seq = 20; seq < 20 + 2 * DeltaPatcher::MAX_DISPATCH_PER_TICK;
+       seq++) {
+    this->sendCmd_APPLY_PATCH(0, seq, Fw::CmdStringArg(this->m_old.c_str()),
+                              Fw::CmdStringArg(this->m_patch.c_str()),
+                              Fw::CmdStringArg(this->m_new.c_str()));
+  }
+  this->clearHistory();
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchRejected_SIZE(2 * DeltaPatcher::MAX_DISPATCH_PER_TICK);
+  ASSERT_EVENTS_PatchComplete_SIZE(0);
+  // Queue is [tick]; the abort lands behind it
+  this->sendCmd_ABORT_PATCH(0, 30);
+  this->clearHistory();
+  this->invoke_to_run(0, 0);
+  ASSERT_EVENTS_PatchComplete_SIZE(1);
+  ASSERT_EVENTS_AbortIgnored_SIZE(1);
+  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::COMPLETE);
+  ASSERT_CMD_RESPONSE_SIZE(2);
+  ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
+                      Fw::CmdResponse::OK);
+  ASSERT_CMD_RESPONSE(1, DeltaPatcher::OPCODE_ABORT_PATCH, 30,
+                      Fw::CmdResponse::VALIDATION_ERROR);
+  ASSERT_FALSE(this->component.isPatchBound());
 }
 
 void DeltaPatcherTester ::abortIdle() {

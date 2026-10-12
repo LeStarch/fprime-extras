@@ -1071,6 +1071,46 @@ TEST(DeltaCodec, RejectsCorruptChunk) {
   EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::BAD_OPCODE);
 }
 
+TEST(DeltaCodec, StagesIdempotentAfterDone) {
+  // A stage function called again after it reported STAGE_DONE (the
+  // component's recovery for a dropped stageDone signal) must report
+  // STAGE_DONE again rather than fail
+  DeltaCoderLzss coder;
+  MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+  MemoryMedia patchMedia(TestVectors::PATCH_LZSS, TestVectors::PATCH_LZSS_SIZE);
+  MemoryMedia newMedia;
+  TestCodec codec(coder);
+  ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+  const U32 MAX_CALLS = 100000;
+  DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+  for (U32 i = 0; i < MAX_CALLS && result != DeltaCodec::STAGE_DONE; i++) {
+    ASSERT_EQ(codec.codec.verifyOld(result), DeltaCodec::OP_OK);
+  }
+  ASSERT_EQ(result, DeltaCodec::STAGE_DONE);
+  result = DeltaCodec::IN_PROGRESS;
+  EXPECT_EQ(codec.codec.verifyOld(result), DeltaCodec::OP_OK);
+  EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
+  EXPECT_EQ(codec.codec.actualOldCrc(), TestVectors::OLD_CRC);
+
+  result = DeltaCodec::IN_PROGRESS;
+  for (U32 i = 0; i < MAX_CALLS && result != DeltaCodec::STAGE_DONE; i++) {
+    ASSERT_EQ(codec.codec.patchChunk(result), DeltaCodec::OP_OK);
+  }
+  ASSERT_EQ(result, DeltaCodec::STAGE_DONE);
+  result = DeltaCodec::IN_PROGRESS;
+  EXPECT_EQ(codec.codec.patchChunk(result), DeltaCodec::OP_OK);
+  EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
+
+  result = DeltaCodec::IN_PROGRESS;
+  for (U32 i = 0; i < MAX_CALLS && result != DeltaCodec::STAGE_DONE; i++) {
+    ASSERT_EQ(codec.codec.verifyFinal(result), DeltaCodec::OP_OK);
+  }
+  ASSERT_EQ(result, DeltaCodec::STAGE_DONE);
+  result = DeltaCodec::IN_PROGRESS;
+  EXPECT_EQ(codec.codec.verifyFinal(result), DeltaCodec::OP_OK);
+  EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
+}
+
 TEST(DeltaCodec, MediaErrors) {
   DeltaCoderLzss coder;
   {

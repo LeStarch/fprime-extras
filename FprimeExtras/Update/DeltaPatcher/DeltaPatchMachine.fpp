@@ -93,7 +93,7 @@ module Update {
         state IDLE {
             on start enter selectResume
             on reject enter FAILED
-            on abort do { reportAbortIgnored }
+            on abort do { reportAbortIgnored, doRelease }
         }
 
         @ Resume only when the existing output holds whole chunks worth checking
@@ -142,7 +142,7 @@ module Update {
             entry do { tlmComplete }
             on start enter selectResume
             on reject enter FAILED
-            on abort do { reportAbortIgnored }
+            on abort do { reportAbortIgnored, doRelease }
         }
 
         @ Patch failed; the output is retained for resume
@@ -150,7 +150,7 @@ module Update {
             entry do { doRelease, tlmFailed }
             on start enter selectResume
             on reject enter FAILED
-            on abort do { reportAbortIgnored }
+            on abort do { reportAbortIgnored, doRelease }
         }
     }
 }

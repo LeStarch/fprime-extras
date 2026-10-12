@@ -129,7 +129,7 @@ class DeltaCodec final {
     FwSizeType oldSize() const { return this->m_header.oldSize; }
     U32 oldCrc() const { return this->m_header.oldCrc; }
     //! CRC computed over the old image by verifyOld(); valid once that stage has reported
-    U32 actualOldCrc() const { return this->m_verify.crc; }
+    U32 actualOldCrc() const { return crcFinal(this->m_verify.crc); }
     FwSizeType newSize() const { return this->m_header.newSize; }
     U32 newCrc() const { return this->m_header.newCrc; }
 
@@ -155,6 +155,7 @@ class DeltaCodec final {
         FwSizeType verifyChunks;   //!< Chunks of existing output to verify on resume
         U32 runningCrc;            //!< New image CRC including the chunk in progress
         U32 committedCrc;          //!< New image CRC through the last accepted chunk
+        bool finished;             //!< Image flushed and refreshed; patchChunk() only reports STAGE_DONE
     };
 
     //! Region under CRC verification (existing output, old image, or final read-back)

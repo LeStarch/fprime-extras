@@ -119,8 +119,7 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
 
 void DeltaPatcher ::ABORT_PATCH_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
     if (!this->isPatchBound()) {
-        this->log_WARNING_LO_AbortIgnored(DeltaPatcher::toState(this->deltaPatchMachine_getState()));
-        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
+        this->ignoreAbort(opCode, cmdSeq);
         return;
     }
     // Answered by reportAborted once the machine has honoured the abort, after the pending APPLY_PATCH
@@ -251,8 +250,7 @@ void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAbortIgnored(SmId smId
                                                                        const Update::DeltaAbortRequest& value) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
     // The patch ended (an earlier abort, a failure or completion) between command dispatch and signal delivery
-    this->log_WARNING_LO_AbortIgnored(DeltaPatcher::toState(this->deltaPatchMachine_getState()));
-    this->cmdResponse_out(value.get_opCode(), value.get_cmdSeq(), Fw::CmdResponse::VALIDATION_ERROR);
+    this->ignoreAbort(value.get_opCode(), value.get_cmdSeq());
 }
 
 void DeltaPatcher ::deltaPatchMachine_stateMachineOverflowHook(SmId smId,
@@ -261,8 +259,14 @@ void DeltaPatcher ::deltaPatchMachine_stateMachineOverflowHook(SmId smId,
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
     this->log_WARNING_HI_SignalDropped(static_cast<U32>(signal));
     // tick, stageDone and fail are re-derived from the codec on the next tick and reject only refreshes
-    // telemetry; an abort carries a command that must still be answered
-    if (signal == static_cast<FwEnumStoreType>(Update_DeltaPatchMachine::Signal::abort)) {
+    // telemetry; start and abort carry a command that must still be answered
+    if (signal == static_cast<FwEnumStoreType>(Update_DeltaPatchMachine::Signal::start)) {
+        // The machine never saw the patch: unbind and answer the APPLY_PATCH recorded in m_pending
+        this->m_codec.reset();
+        this->closeMedia();
+        this->log_WARNING_HI_PatchRejected(DeltaPatchStatus::BUSY);
+        this->completePending(DeltaPatchStatus::BUSY, Fw::CmdResponse::BUSY);
+    } else if (signal == static_cast<FwEnumStoreType>(Update_DeltaPatchMachine::Signal::abort)) {
         DeltaAbortRequest request;
         if (buffer.deserializeTo(request) == Fw::FW_SERIALIZE_OK) {
             this->cmdResponse_out(request.get_opCode(), request.get_cmdSeq(), Fw::CmdResponse::BUSY);
@@ -312,6 +316,11 @@ void DeltaPatcher ::rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatu
     this->log_WARNING_HI_PatchRejected(status);
     this->tlmWrite_LastStatus(status);
     this->cmdResponse_out(opCode, cmdSeq, response);
+}
+
+void DeltaPatcher ::ignoreAbort(FwOpcodeType opCode, U32 cmdSeq) {
+    this->log_WARNING_LO_AbortIgnored(DeltaPatcher::toState(this->deltaPatchMachine_getState()));
+    this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
 }
 
 void DeltaPatcher ::completePending(DeltaPatchStatus status, Fw::CmdResponse response) {

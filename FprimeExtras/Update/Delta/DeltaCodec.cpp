@@ -46,6 +46,7 @@ void DeltaCodec::reset() {
     this->m_patch = nullptr;
     this->m_new = nullptr;
     this->m_progress.chunkIndex = 0;
+    this->m_progress.finished = false;
     this->m_progress.patchPos = 0;
     this->m_progress.resumedChunks = 0;
     this->m_progress.verifyChunks = 0;
@@ -272,6 +273,9 @@ DeltaCodec::Status DeltaCodec::verifyNew(StepResult& result) {
             U32 expectedCrc = 0;
             const Status status = this->readChunkHeader(codedLength, expectedCrc);
             if (status != OP_OK) {
+                // Leave the span reset so a re-entered stage re-verifies this chunk instead of over-running it
+                this->m_verify.offset = 0;
+                this->m_verify.crc = crcInit();
                 return status;
             }
             if (crcFinal(this->m_verify.crc) == expectedCrc) {
@@ -309,9 +313,8 @@ DeltaCodec::Status DeltaCodec::verifyOld(StepResult& result) {
         }
     }
     if (this->m_verify.offset >= header.oldSize) {
-        // Kept finalized so actualOldCrc() can be reported alongside the header's value
-        this->m_verify.crc = crcFinal(this->m_verify.crc);
-        if (this->m_verify.crc != header.oldCrc) {
+        // The span CRC stays un-finalized so a repeated call (a dropped stageDone) gives the same answer
+        if (crcFinal(this->m_verify.crc) != header.oldCrc) {
             return OLD_IMAGE_MISMATCH;
         }
         result = STAGE_DONE;
@@ -352,6 +355,11 @@ DeltaCodec::Status DeltaCodec::patchChunk(StepResult& result) {
     FW_ASSERT(this->m_new != nullptr);
     result = IN_PROGRESS;
     this->m_ioCount = 0;
+    if (this->m_progress.finished) {
+        // A repeated call after completion (dropped stageDone) must not re-run the read-back refresh
+        result = STAGE_DONE;
+        return OP_OK;
+    }
     if (this->m_progress.chunkIndex >= this->m_header.chunkCount) {
         return this->finishImage(result);
     }
@@ -412,6 +420,7 @@ DeltaCodec::Status DeltaCodec::finishImage(StepResult& result) {
     }
     this->m_verify.offset = 0;
     this->m_verify.crc = crcInit();
+    this->m_progress.finished = true;
     result = STAGE_DONE;
     return OP_OK;
 }

@@ -25,9 +25,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 | DP-015 | Persistent engine and component state shall be grouped in named structs. | `DeltaCodec.hpp`, `DeltaPatcher.hpp` |
 | DP-016 | The `State` channel shall report the verification stages. | UT `Nominal`, int `test_apply_patch_nominal` |
 | DP-017 | `ABORT_PATCH` shall be answered after the abort has taken effect, following the aborted `APPLY_PATCH` response. | UT `AbortAndResume` |
-| DP-018 | All three shipped coders shall be exercised on real deployment images. | int `test_ref_variants.py` | The coder is fixed per deployment (`setCoder`), so the campaign is run once per coder
-  against a deployment built with that coder; a coder the deployment does not install is reported `CODER_MISMATCH`
-  and that case is skipped.
+| DP-018 | All three shipped coders shall be exercised on real deployment images. | int `test_ref_variants.py`, run once per coder against a deployment built with that coder (a coder the deployment does not install is reported `CODER_MISMATCH` and skipped) |
 | DP-010 | `ABORT_PATCH` shall stop patching and retain the partial output for resume. | UT `AbortAndResume` |
 
 ## Design
@@ -56,12 +54,13 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   `doVerifyFinal`) that calls the matching `DeltaCodec` stage function once and translates its `Status` /
   `StepResult` into a `stageDone` or `fail` signal (`reportStep`). Transition actions own the reporting:
   `reportResumed` (VERIFY_NEW→VERIFY_OLD), `reportComplete` (VERIFY_FINAL→COMPLETE), `reportFailed: DeltaPatchStatus`,
-  `reportAborted: DeltaAbortRequest` (answers both the pending `APPLY_PATCH` and the `ABORT_PATCH` that caused it);
-  entry actions `tlm*` publish `State`, and `doRelease` on entry to COMPLETE/FAILED (and on abort) closes the media and
+  `reportAborted: DeltaAbortRequest` (answers both the pending `APPLY_PATCH` and the `ABORT_PATCH` that caused it),
+  `reportAbortIgnored: DeltaAbortRequest` (an `abort` reaching a resting state answers its `ABORT_PATCH` `VALIDATION_ERROR`);
+  entry actions `tlm*` publish `State`, and `doRelease` (on the `VERIFY_FINAL --stageDone-->` transition, on entry to FAILED and on every `abort`) closes the media and
   resets the engine. The component therefore keeps no lifecycle state of its own: "busy" is "media bound"
   (`isPatchBound()`), and the only other persistent member is the `PendingCommand` struct holding the deferred
-  `APPLY_PATCH` response. `APPLY_PATCH` validates paths, opens media and runs `DeltaCodec::begin()` on the command
-  thread; failures there are answered immediately (`PatchRejected`) and `reject` moves the machine to FAILED.
+  `APPLY_PATCH` response. `APPLY_PATCH` validates paths, opens media and runs `DeltaCodec::begin()` in the command handler, i.e. on the
+  thread that calls `run`; failures there are answered immediately (`PatchRejected`) and `reject` moves the machine to FAILED.
 * **Delegate (engine).** `DeltaCodec` owns no lifecycle either: its public surface is `begin()`,
   `hasOutputToVerify()`, `verifyNew()`, `verifyOld()`, `patchChunk()`, `verifyFinal()` and `reset()`, each stage call
   doing one bounded unit of work and reporting `IN_PROGRESS` or `STAGE_DONE`. Its state is five structs — `Header`
@@ -86,8 +85,8 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   policy instead of the autocoder's default assert: a signal that finds the queue full is dropped with a
   `SignalDropped` warning. Every dropped signal is recoverable: `tick`, `stageDone` and `fail` are re-derived
   from the codec on the next tick (each stage function is idempotent once its stage has finished or failed),
-  `reject` only refreshes telemetry, and a dropped `abort` is answered `BUSY` from the hook so no `ABORT_PATCH` is
-  orphaned. An `abort` delivered after the patch has already ended (a second abort in the same tick, or a failure
+  `reject` only refreshes telemetry, a dropped `start` makes the hook unbind the patch and answer its `APPLY_PATCH` `BUSY`, and a dropped `abort`
+  is answered `BUSY` from the hook so no command is orphaned. An `abort` delivered after the patch has already ended (a second abort in the same tick, or a failure
   that overtook it) is answered `VALIDATION_ERROR` with `AbortIgnored` by the resting states. A tick
   verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
@@ -234,6 +233,7 @@ possible without touching the patch payload.
 | `PatchComplete` | activity high | New image written and verified |
 | `PatchAborted` | activity high | Operator abort |
 | `AbortIgnored` | warning low | `ABORT_PATCH` received while not patching |
+| `SignalDropped` | warning high | A state-machine signal found the component queue full of commands; `tick`/`stageDone`/`fail` are recovered on the next tick, a dropped `start` answers its `APPLY_PATCH` `BUSY` and unbinds, a dropped `abort` answers its `ABORT_PATCH` `BUSY` |
 
 ## Telemetry
 
@@ -292,6 +292,9 @@ rate group to `deltaPatcher.run`, and lets FileUplink write to `/tmp/uplink` (GD
 needs `fprime-gds` and `pip install ./python`, and resolves the instance through the integration-config key
 `Update.DeltaPatcher`:
 
+    pytest FprimeExtras/Update/DeltaPatcher/test/int --dictionary <deployment>/dict/<Topology>TopologyDictionary.json \
+        --deployment-config <deployment>/test/int/int_config.json
+
 `test/int/test_ref_variants.py` is the DP-018 campaign: it builds an SPatch between two real deployment images
 with the ground tool for each requested coder, applies it on the deployment through `APPLY_PATCH`, and compares the
 produced file byte-for-byte with the target image. Options (`test/int/conftest.py`): `--old-image`, `--new-image`
@@ -299,7 +302,9 @@ produced file byte-for-byte with the target image. Options (`test/int/conftest.p
 `none`, `rle`, `lzss`), `--chunk-bytes`, and `--uplink-dir` (required: the directory the deployment's FileUplink
 accepts; the images are placed there directly because GDS and flight software share the host). The coder is fixed
 per deployment, so the campaign is run once per coder against a deployment built with that coder; a coder the
-deployment does not install is answered `PatchRejected(CODER_MISMATCH)` and that case is skipped.
+deployment does not install is answered `PatchRejected(CODER_MISMATCH)` and that case is skipped:
 
-    pytest FprimeExtras/Update/DeltaPatcher/test/int --dictionary <deployment>/dict/<Topology>TopologyDictionary.json \
-        --deployment-config <deployment>/test/int/int_config.json
+    pytest FprimeExtras/Update/DeltaPatcher/test/int/test_ref_variants.py --dictionary <dict>.json \
+        --deployment-config <int_config>.json --old-image A.bin --new-image B.bin --coders lzss --chunk-bytes 4096 \
+        --uplink-dir /tmp/uplink
+

@@ -203,6 +203,9 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Reject APPLY_PATCH before a patch is bound
     void rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatus status, Fw::CmdResponse response);
 
+    //! Answer an ABORT_PATCH that found no patch in progress (single emission site of AbortIgnored)
+    void ignoreAbort(FwOpcodeType opCode, U32 cmdSeq);
+
     //! Answer the pending APPLY_PATCH and record its outcome
     void completePending(DeltaPatchStatus status, Fw::CmdResponse response);
 

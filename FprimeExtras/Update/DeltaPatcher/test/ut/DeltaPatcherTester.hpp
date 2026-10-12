@@ -85,6 +85,15 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Queue held full of ABORT_PATCH while bound: hook absorbs dropped signals
     void signalOverflow();
 
+    //! start signal dropped by a full queue: hook unbinds and answers BUSY
+    void startDropped();
+
+    //! Overflow hook answers a dropped abort directly
+    void hookAnswersDroppedAbort();
+
+    //! Abort dispatched with the completing tick: answered from COMPLETE
+    void abortOvertakenByCompletion();
+
     //! Queue-full commands are answered BUSY immediately via the overflow hook
     void queueOverflow();
 

@@ -67,6 +67,21 @@ TEST(OffNominal, SignalOverflow) {
     tester.signalOverflow();
 }
 
+TEST(OffNominal, StartDropped) {
+    Update::DeltaPatcherTester tester;
+    tester.startDropped();
+}
+
+TEST(OffNominal, HookAnswersDroppedAbort) {
+    Update::DeltaPatcherTester tester;
+    tester.hookAnswersDroppedAbort();
+}
+
+TEST(OffNominal, AbortOvertakenByCompletion) {
+    Update::DeltaPatcherTester tester;
+    tester.abortOvertakenByCompletion();
+}
+
 TEST(OffNominal, AbortIdle) {
     Update::DeltaPatcherTester tester;
     tester.abortIdle();
