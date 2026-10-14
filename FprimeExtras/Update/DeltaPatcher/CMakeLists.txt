@@ -23,6 +23,7 @@ register_fprime_ut(
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaPatcherTestMain.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaPatcherTester.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/PatcherRules.cpp"
     DEPENDS
         FprimeExtras_Update_Delta
         STest
