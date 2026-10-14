@@ -35,6 +35,11 @@ register_fprime_library(
 register_fprime_ut(
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaTestMain.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaRulesTester.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaRulesTests.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/CoderRules.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/CodecRules.cpp"
     DEPENDS
         gtest
+        STest
 )
