@@ -220,16 +220,12 @@ static void putCopy(std::vector<U8>& out, U64 length) {
     putVarint(out, length);
 }
 
-//! Build a patch from raw operation streams (one per chunk), each coded with `coderId`
-static std::vector<U8> buildOpPatch(U8 coderId,
-                                    const std::vector<U8>& oldImage,
-                                    const std::vector<U8>& newImage,
-                                    FwSizeType chunkBytes,
-                                    const std::vector<std::vector<U8>>& opChunks) {
-    std::vector<std::vector<U8>> chunks;
-    for (const std::vector<U8>& ops : opChunks) {
-        chunks.push_back(TestEncoders::encode(coderId, ops));
-    }
+//! Build a patch labelled `coderId` from already-coded chunk payloads (chunk CRCs taken from `newImage`)
+static std::vector<U8> buildCodedPatch(U8 coderId,
+                                       const std::vector<U8>& oldImage,
+                                       const std::vector<U8>& newImage,
+                                       FwSizeType chunkBytes,
+                                       const std::vector<std::vector<U8>>& chunks) {
     std::vector<U8> patch = {
         'S', 'P', 'A', 'T', DeltaCodec::VERSION, coderId, 0, static_cast<U8>(DeltaCodec::SIZE_FIELD_WIDTH)};
     putSize(patch, oldImage.size());
@@ -246,6 +242,19 @@ static std::vector<U8> buildOpPatch(U8 coderId,
         patch.insert(patch.end(), chunks[i].begin(), chunks[i].end());
     }
     return patch;
+}
+
+//! Build a patch from raw operation streams (one per chunk), each coded with `coderId`
+static std::vector<U8> buildOpPatch(U8 coderId,
+                                    const std::vector<U8>& oldImage,
+                                    const std::vector<U8>& newImage,
+                                    FwSizeType chunkBytes,
+                                    const std::vector<std::vector<U8>>& opChunks) {
+    std::vector<std::vector<U8>> chunks;
+    for (const std::vector<U8>& ops : opChunks) {
+        chunks.push_back(TestEncoders::encode(coderId, ops));
+    }
+    return buildCodedPatch(coderId, oldImage, newImage, chunkBytes, chunks);
 }
 
 static std::vector<U8> pseudoRandom(FwSizeType size, U32 seed) {
@@ -660,9 +669,8 @@ void DeltaRulesTester::Static__RejectsConsecutiveSeeks__action() {
             coded.push_back(255);
         }
     }
-    std::vector<U8> patch = buildOpPatch(this->m_coder.id(), oldImage, oldImage, oldSize, {coded});
-    patch[5] = DeltaCoder::ID_LZSS;
-    putBe(&patch[DeltaCodec::HDR_CRC], crcOf(patch.data(), DeltaCodec::HDR_CRC), sizeof(U32));
+    // The chunk is hand-coded LZSS, so the patch is labelled LZSS and decoded by an LZSS coder
+    const std::vector<U8> patch = buildCodedPatch(DeltaCoder::ID_LZSS, oldImage, oldImage, oldSize, {coded});
     MemoryMedia oldMedia(oldImage.data(), oldImage.size());
     MemoryMedia patchMedia(patch.data(), patch.size());
     MemoryMedia newMedia;

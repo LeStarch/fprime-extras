@@ -24,10 +24,6 @@
 using namespace Update;
 
 // ----------------------------------------------------------------------
-// Test helpers
-// ----------------------------------------------------------------------
-
-// ----------------------------------------------------------------------
 // DeltaWindow
 // ----------------------------------------------------------------------
 TEST(DeltaWindow, PushPeekPopHistory) {
@@ -78,14 +74,8 @@ TEST(DeltaWindow, PushPeekPopHistory) {
 }
 
 // ----------------------------------------------------------------------
-// DeltaCodec: nominal application with every shipped coder
+// DeltaCodec: memory footprint
 // ----------------------------------------------------------------------
-
-struct PatchCase {
-    const char* name;
-    const U8* patch;
-    FwSizeType size;
-};
 
 TEST(DeltaCodec, MemoryFootprint) {
     // REQ: engine + coder state fits the constrained-system budget with default
@@ -99,28 +89,6 @@ TEST(DeltaCodec, MemoryFootprint) {
         sizeof(DeltaCoderNone), sizeof(DeltaFileMedia));
     EXPECT_LE(sizeof(DeltaCodec) + sizeof(DeltaCoderLzss), 1024u);
 }
-
-// ----------------------------------------------------------------------
-// DeltaCodec: resume
-// ----------------------------------------------------------------------
-
-// ----------------------------------------------------------------------
-// DeltaCodec: rejection paths
-// ----------------------------------------------------------------------
-
-// Build a one-chunk v2 patch over an empty old image whose new image is `newSize`
-// bytes of `fill`, carrying `coded` as the chunk payload for `coderId`
-
-// ----------------------------------------------------------------------
-// Hand-built patches: operand bounds and multi-step verification
-// ----------------------------------------------------------------------
-
-//! Assemble a coder-less (ID_NONE) SPatch: one chunk per entry of `chunks`,
-//! with chunk CRCs taken from `newImage`
-
-// ----------------------------------------------------------------------
-// Chunk transactions, I/O budget and media fault classification
-// ----------------------------------------------------------------------
 
 // ----------------------------------------------------------------------
 // DeltaFileMedia: end-to-end through real files

@@ -21,7 +21,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
 | DP-011 | The patch lifecycle shall be modeled as an FPP state machine whose actions delegate bounded work to the engine. | `DeltaPatchMachine.fpp`, UT `Nominal`, `AbortAndResume` |
 | DP-012 | Each validator shall document the byte layout it validates. | `DeltaCodec.cpp`, `DeltaCoder*.cpp` |
 | DP-013 | Each shipped coder shall live in its own source files; the interface file shall hold no implementation. | `Delta/CMakeLists.txt` |
-| DP-014 | Flight code shall contain no `while` loops; every loop shall carry an explicit bound. | code inspection, UT `VerifySpansSteps`, `IoBudgetSpansSteps` |
+| DP-014 | Flight code shall contain no `while` loops; every loop shall carry an explicit bound. | code inspection, rules `Static.VerifySpansSteps`, `Static.IoBudgetSpansSteps` (run per coder by `DeltaStatic.*`) |
 | DP-015 | Persistent engine and component state shall be grouped in named structs. | `DeltaCodec.hpp`, `DeltaPatcher.hpp` |
 | DP-016 | The `State` channel shall report the verification stages. | UT `Nominal`, int `test_apply_patch_nominal` |
 | DP-017 | `ABORT_PATCH` shall be answered after the abort has taken effect, following the aborted `APPLY_PATCH` response. | UT `AbortAndResume` |
@@ -300,9 +300,26 @@ input, validates the dictionary it reads `FwSizeType` from, and keeps stdout cle
 
 ## Unit tests
 
-`test/ut/` covers nominal, busy, open failure, bad header, coder mismatch, old-image mismatch, chunk corruption +
-resume, abort + resume, abort while idle, same-file rejection, and queue overflow. The codec library tests live in
-`FprimeExtras/Update/Delta/test/ut/`.
+Both suites are rules-based (STest) and run the same rules against every shipped coder.
+
+- `FprimeExtras/Update/Delta/test/ut/`: `DeltaRulesTester` holds the `DeltaCoder` under test and the `DeltaCodec`
+  engine. `Rules/StaticRules.cpp` holds the deterministic rules (golden vectors, nominal apply, resume over partial /
+  complete / stale output, header, size-width, geometry, operand and op-stream rejections, truncation, chunk
+  corruption, idempotent stages, media faults, read-back faults, I/O budget, shrunk-media classification, coverage
+  rules for the defensive error paths); `DeltaStatic.None/Rle/Lzss` run them in sequence per coder.
+  `Rules/CoderRules.cpp` and `Rules/CodecRules.cpp` hold the random rules (stream round trip / truncated / garbage;
+  engine begin / step / abort / corrupt output / corrupt patch / media fault / wrong coder / bad header / bad patch
+  size); `DeltaRules.RandomNone/Rle/Lzss` run 50 000 applications each. Oracles: the test-side reference encoders
+  and random SPatch builder in `DeltaTestEncoders.hpp`, the intended image, an independent CRC and the golden
+  vectors in `DeltaTestVectors.hpp` (produced by `generate_vectors.py`). `DeltaTestMain.cpp` keeps only the
+  `DeltaWindow`, memory-footprint and `DeltaFileMedia` tests.
+- `test/ut/` (this component): the direct tests (nominal, busy, open failure, bad header, coder mismatch,
+  old-image mismatch, chunk corruption + resume, abort + resume, abort while idle, overflow hook, dropped signals,
+  same-file / special-file rejection, output replaced before verify) plus `Rules/PatcherRules.cpp`, a random walk
+  over `APPLY_PATCH` / `ABORT_PATCH` / `run` ticks with damaged patch, output and old image, missing inputs,
+  same-file paths and a flooded queue; `Rules.RandomNone/Rle/Lzss` run 20 000 applications each with that coder
+  installed through `setCoder()`. Oracles: the intended image, the `DeltaPatchMachine` state (`State` /
+  `StateEntered`), `LastStatus`, and exactly one response per command.
 
 ## Integration tests
 

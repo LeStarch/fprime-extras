@@ -227,8 +227,6 @@ inline void putBe(U8* dest, U64 value, FwSizeType width) {
     }
 }
 
-// Rewrite a size (FwSizeType) header field and recompute the header CRC so only
-// the geometry check can fail
 // CRC32 (IEEE 802.3, init 0xFFFFFFFF, final inversion) as written into SPatch
 inline U32 crc32(const U8* data, FwSizeType length) {
     if (length == 0) {
