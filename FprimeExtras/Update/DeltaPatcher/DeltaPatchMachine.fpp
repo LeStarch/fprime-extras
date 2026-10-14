@@ -14,8 +14,10 @@ module Update {
     }
 
     @ Lifecycle of one APPLY_PATCH. The machine owns the state; every `tick` action delegates one bounded unit of
-    @ work to the DeltaCodec (verifyNew / verifyOld / patchChunk / verifyFinal), which answers through `stageDone`
-    @ or `fail`. The output file is retained on abort and failure so a later APPLY_PATCH resumes.
+    @ work to the DeltaCodec (verifyResume / verifyOld / patchChunk / verifyFinal), which answers through
+    @ `stageDone` or `fail`. Every state announces itself on entry (StateEntered event + State channel). A patch
+    @ ends — complete, failed or aborted — by returning to IDLE, whose entry releases the media and resets the
+    @ engine; the output file is retained on abort and failure so a later APPLY_PATCH resumes.
     state machine DeltaPatchMachine {
         initial enter IDLE
 
@@ -34,14 +36,11 @@ module Update {
         @ Operator ABORT_PATCH, carrying the command to answer once the abort has taken effect
         signal abort: DeltaAbortRequest
 
-        @ APPLY_PATCH rejected once the handler has tried to open the files (open or header failure); nothing is bound
-        signal reject
-
         @ True when the existing new file holds whole chunks to CRC-verify before patching (resume)
         guard hasOutputToVerify
 
-        @ Delegate one unit of resume verification to DeltaCodec::verifyNew()
-        action doVerifyNew
+        @ Delegate one unit of resume verification to DeltaCodec::verifyResume()
+        action doVerifyResume
 
         @ Delegate one unit of old-image verification to DeltaCodec::verifyOld()
         action doVerifyOld
@@ -52,24 +51,21 @@ module Update {
         @ Delegate one unit of read-back verification to DeltaCodec::verifyFinal()
         action doVerifyFinal
 
-        @ Report VERIFY_NEW on the State telemetry channel (entry actions run before the state is recorded, so each
-        @ state names its own)
-        action tlmVerifyNew
+        @ Announce entry into IDLE (StateEntered event + State channel). FPP entry actions take no argument and run
+        @ before the state is recorded, so each state names its own; all five delegate to DeltaPatcher::reportState()
+        action enterIdle
 
-        @ Report VERIFY_OLD on the State telemetry channel
-        action tlmVerifyOld
+        @ Announce entry into VERIFY_RESUME
+        action enterVerifyResume
 
-        @ Report PATCHING on the State telemetry channel
-        action tlmPatching
+        @ Announce entry into VERIFY_OLD
+        action enterVerifyOld
 
-        @ Report VERIFY_FINAL on the State telemetry channel
-        action tlmVerifyFinal
+        @ Announce entry into PATCHING
+        action enterPatching
 
-        @ Report COMPLETE on the State telemetry channel
-        action tlmComplete
-
-        @ Report FAILED on the State telemetry channel
-        action tlmFailed
+        @ Announce entry into VERIFY_FINAL
+        action enterVerifyFinal
 
         @ Emit PatchResumed when verified chunks were skipped
         action reportResumed
@@ -80,77 +76,62 @@ module Update {
         @ Emit OldImageMismatch or ChunkFailed, answer APPLY_PATCH EXECUTION_ERROR
         action reportFailed: DeltaPatchStatus
 
-        @ Emit PatchAborted, answer APPLY_PATCH EXECUTION_ERROR and ABORT_PATCH OK, report IDLE
+        @ Emit PatchAborted, answer APPLY_PATCH EXECUTION_ERROR and ABORT_PATCH OK
         action reportAborted: DeltaAbortRequest
 
-        @ Answer an ABORT_PATCH whose patch had already ended when the signal arrived
+        @ Answer an ABORT_PATCH that found no patch in progress
         action reportAbortIgnored: DeltaAbortRequest
 
-        @ Close the media and forget the codec progress
+        @ Close the media and forget the codec progress (idempotent)
         action doRelease
 
-        @ No patch bound
+        @ No patch bound: entry releases whatever the ending patch left behind
         state IDLE {
+            entry do { doRelease, enterIdle }
             on start enter selectResume
-            on reject enter FAILED
-            on abort do { reportAbortIgnored, doRelease }
+            on abort do { reportAbortIgnored }
         }
 
         @ Resume only when the existing output holds whole chunks worth checking
         choice selectResume {
-            if hasOutputToVerify enter VERIFY_NEW else enter VERIFY_OLD
+            if hasOutputToVerify enter VERIFY_RESUME else enter VERIFY_OLD
         }
 
-        @ Resume: CRC-check chunks already present in the new file
-        state VERIFY_NEW {
-            entry do { tlmVerifyNew }
-            on tick do { doVerifyNew }
+        @ Resume: CRC-check the chunks already present in the new file to find where patching picks up
+        state VERIFY_RESUME {
+            entry do { enterVerifyResume }
+            on tick do { doVerifyResume }
             on stageDone do { reportResumed } enter VERIFY_OLD
-            on fail do { reportFailed } enter FAILED
-            on abort do { reportAborted, doRelease } enter IDLE
+            on fail do { reportFailed } enter IDLE
+            on abort do { reportAborted } enter IDLE
         }
 
         @ CRC-check the old image against the header
         state VERIFY_OLD {
-            entry do { tlmVerifyOld }
+            entry do { enterVerifyOld }
             on tick do { doVerifyOld }
             on stageDone enter PATCHING
-            on fail do { reportFailed } enter FAILED
-            on abort do { reportAborted, doRelease } enter IDLE
+            on fail do { reportFailed } enter IDLE
+            on abort do { reportAborted } enter IDLE
         }
 
         @ Apply chunks; the last patchChunk() flushes and re-resolves the output
         state PATCHING {
-            entry do { tlmPatching }
+            entry do { enterPatching }
             on tick do { doPatchChunk }
             on stageDone enter VERIFY_FINAL
-            on fail do { reportFailed } enter FAILED
-            on abort do { reportAborted, doRelease } enter IDLE
+            on fail do { reportFailed } enter IDLE
+            on abort do { reportAborted } enter IDLE
         }
 
-        @ Read the stored new image back and check its size and CRC
+        @ Read the stored new image back and check its size and CRC. The media are released before
+        @ reportComplete so patchComplete hands over a closed file
         state VERIFY_FINAL {
-            entry do { tlmVerifyFinal }
+            entry do { enterVerifyFinal }
             on tick do { doVerifyFinal }
-            on stageDone do { doRelease, reportComplete } enter COMPLETE
-            on fail do { reportFailed } enter FAILED
-            on abort do { reportAborted, doRelease } enter IDLE
-        }
-
-        @ New image produced and verified
-        state COMPLETE {
-            entry do { tlmComplete }
-            on start enter selectResume
-            on reject enter FAILED
-            on abort do { reportAbortIgnored, doRelease }
-        }
-
-        @ Patch failed; the output is retained for resume
-        state FAILED {
-            entry do { doRelease, tlmFailed }
-            on start enter selectResume
-            on reject enter FAILED
-            on abort do { reportAbortIgnored, doRelease }
+            on stageDone do { doRelease, reportComplete } enter IDLE
+            on fail do { reportFailed } enter IDLE
+            on abort do { reportAborted } enter IDLE
         }
     }
 }

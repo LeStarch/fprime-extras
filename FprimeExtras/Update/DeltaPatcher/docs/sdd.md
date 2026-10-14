@@ -43,28 +43,34 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   (`DeltaPatchMachine.fpp`), instanced as `deltaPatchMachine`:
 
   ```
-  IDLE --start--> [hasOutputToVerify] --yes--> VERIFY_NEW --stageDone--> VERIFY_OLD --stageDone--> PATCHING
-                                       --no--> VERIFY_OLD                                              |
-  VERIFY_FINAL <--stageDone-------------------------------------------------------------------------------+
-     | stageDone -> COMPLETE          any working state: fail(status) -> FAILED, abort -> IDLE
-  COMPLETE / FAILED / IDLE --start--> (resume choice)     IDLE / COMPLETE / FAILED --reject--> FAILED
+  IDLE --start--> [hasOutputToVerify] --yes--> VERIFY_RESUME --stageDone--> VERIFY_OLD --stageDone--> PATCHING
+                                       --no--> VERIFY_OLD                                                 |
+  VERIFY_FINAL <--stageDone----------------------------------------------------------------------------------+
+     | stageDone (doRelease, reportComplete) -> IDLE      any working state: fail(status) -> IDLE, abort -> IDLE
   ```
 
-  Each working state handles `tick` with one delegate action (`doVerifyNew`, `doVerifyOld`, `doPatchChunk`,
+  IDLE is the only resting state: a patch ends — complete, failed or aborted — by returning to it, and its entry
+  action `doRelease` closes the media and resets the engine, so IDLE always means "nothing bound". The outcome of
+  the last patch lives in `LastStatus` and the terminal event (`PatchComplete`, `OldImageMismatch`/`ChunkFailed`,
+  `PatchAborted`), not in a state. Every state announces its entry through one C++ helper, `reportState()`, which
+  emits `StateEntered(entered)` and writes the `State` channel; FPP entry actions cannot carry an argument and run
+  before the state is recorded, so each state declares a one-line `enter*` action naming itself.
+
+  Each working state handles `tick` with one delegate action (`doVerifyResume`, `doVerifyOld`, `doPatchChunk`,
   `doVerifyFinal`) that calls the matching `DeltaCodec` stage function once and translates its `Status` /
   `StepResult` into a `stageDone` or `fail` signal (`reportStep`). Transition actions own the reporting:
-  `reportResumed` (VERIFY_NEW→VERIFY_OLD), `reportComplete` (VERIFY_FINAL→COMPLETE), `reportFailed: DeltaPatchStatus`,
+  `reportResumed` (VERIFY_RESUME→VERIFY_OLD), `reportComplete` (VERIFY_FINAL→IDLE), `reportFailed: DeltaPatchStatus`,
   `reportAborted: DeltaAbortRequest` (answers both the pending `APPLY_PATCH` and the `ABORT_PATCH` that caused it),
-  `reportAbortIgnored: DeltaAbortRequest` (an `abort` reaching a resting state answers its `ABORT_PATCH` `VALIDATION_ERROR`);
-  entry actions `tlm*` publish `State`, and `doRelease` (on the `VERIFY_FINAL --stageDone-->` transition, on entry to FAILED and on every `abort`) closes the media and
-  resets the engine. The component therefore keeps no lifecycle state of its own: "busy" is "media bound"
+  `reportAbortIgnored: DeltaAbortRequest` (an `abort` reaching IDLE answers its `ABORT_PATCH` `VALIDATION_ERROR`);
+  `doRelease` runs on every IDLE entry and, so that `patchComplete` hands over a closed file, once more ahead of
+  `reportComplete` on the `VERIFY_FINAL --stageDone-->` transition (it is idempotent). The component therefore keeps no lifecycle state of its own: "busy" is "media bound"
   (`isPatchBound()`), and the only other persistent member is the `PendingCommand` struct holding the deferred
   `APPLY_PATCH` response. `APPLY_PATCH` validates paths, opens media and runs `DeltaCodec::begin()` in the command handler, i.e. on the
-  thread that calls `run`; failures once the handler has tried to open the files are answered immediately (`PatchRejected`) and `reject`
-  moves the machine to FAILED; `BUSY` and path-check rejections (`SAME_FILE`, an unresolvable path) are answered
-  without a signal and leave the machine and `State` unchanged.
+  thread that calls `run`; every rejection (`BUSY`, `SAME_FILE`, an unresolvable path, `OPEN_FAILED`, header
+  failures) is answered immediately with `PatchRejected` and `LastStatus`, closes whatever was opened, and never
+  reaches the machine, which stays in IDLE with `State` unchanged.
 * **Delegate (engine).** `DeltaCodec` owns no lifecycle either: its public surface is `begin()`,
-  `hasOutputToVerify()`, `verifyNew()`, `verifyOld()`, `patchChunk()`, `verifyFinal()` and `reset()`, each stage call
+  `hasOutputToVerify()`, `verifyResume()`, `verifyOld()`, `patchChunk()`, `verifyFinal()` and `reset()`, each stage call
   doing one bounded unit of work and reporting `IN_PROGRESS` or `STAGE_DONE`. Its state is five structs — `Header`
   (geometry from the SPatch header), `Progress` (chunk index, patch position, resume counts, committed/running CRC),
   `VerifySpan` (region under CRC check), `Chunk` (the chunk in flight, including the parsed operation) and
@@ -87,7 +93,7 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   policy instead of the autocoder's default assert: a signal that finds the queue full is dropped with a
   `SignalDropped` warning. Every dropped signal is recoverable: `tick`, `stageDone` and `fail` are re-derived
   from the codec on the next tick (each stage function is idempotent once its stage has finished or failed),
-  `reject` only refreshes telemetry, a dropped `start` makes the hook unbind the patch and answer its `APPLY_PATCH` `BUSY` (`SignalDropped(start)` is
+  a dropped `start` makes the hook unbind the patch and answer its `APPLY_PATCH` `BUSY` (`SignalDropped(start)` is
   the trace; no second `PatchRejected`), and a dropped `abort`
   is answered `BUSY` from the hook so no command is orphaned. While ground sustains more than
   `MAX_DISPATCH_PER_TICK` commands per tick, every `tick` is dropped and the patch makes no progress until the flood
@@ -125,20 +131,22 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   bytes exhausted, operation stream drained, window empty, coder not `pending()`) and the chunk CRC matches. Only
   then is the slice written and the media flushed. A rejected chunk therefore never exists on the media as a
   complete, CRC-valid chunk; the committed prefix is exactly the chunks that passed.
-* **Resume.** In `VERIFY_NEW` (`verifyNew()`, one bounded slice per tick), the codec walks the existing `new_file` chunk-by-chunk, comparing the CRC of each
-  prefix chunk to the CRC stored in the patch. Patching restarts at the first chunk that does not verify. No coder
+* **Resume.** `VERIFY_RESUME` is entered only when `new_file` already holds at least one whole chunk (a fresh
+  patch goes straight to `VERIFY_OLD`). There (`verifyResume()`, one bounded slice per tick) the codec walks the
+  existing `new_file` chunk-by-chunk, comparing the CRC of each prefix chunk to the `output_crc32` stored in that
+  chunk's header in the patch; the patch payload itself is not read. Patching restarts at the first chunk that does not verify. No coder
   state is persisted because each chunk is coded independently. `PatchResumed(chunk)` reports the restart point.
   Skipped chunks are trusted on CRC alone (they are not re-decoded); CRC32 detects accidental corruption, not a
   deliberate forgery — see *Integrity*.
 * **Read-back.** After the last chunk the codec calls `DeltaMedia::flush()` on the new image (`WRITE_ERROR` on
   failure), then `DeltaMedia::refresh()` — `DeltaFileMedia` re-resolves `new_file` by path (closing the handle and
-  re-opening it, `NEW_IMAGE_MISMATCH` if the path no longer names a regular file) so `COMPLETE` attests to the file
+  re-opening it, `NEW_IMAGE_MISMATCH` if the path no longer names a regular file) so `PatchComplete` attests to the file
   the operator will find at `new_file`, not to an orphaned inode that was replaced during patching — and enters
   `VERIFY_FINAL`, re-reading the stored image in `DELTA_VERIFY_BYTES_PER_STEP` slices and
-  comparing size and CRC to the header (`NEW_IMAGE_MISMATCH` otherwise). `COMPLETE` therefore attests to the bytes
+  comparing size and CRC to the header (`NEW_IMAGE_MISMATCH` otherwise). `PatchComplete` therefore attests to the bytes
   on the media, not to the bytes handed to it; a project flash-region `DeltaMedia` gets write-then-verify for free.
 * **Command completion.** `APPLY_PATCH` is answered by the state machine's `reportComplete` (OK) or `reportFailed`
-  (`EXECUTION_ERROR`) action, i.e. on the transition into `COMPLETE` or `FAILED`. Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
+  (`EXECUTION_ERROR`) action, i.e. on the transition back into `IDLE`. Rejections detected in the command handler (`BUSY`, `SAME_FILE`, `OPEN_FAILED`, header
   failures, old-image *size* mismatch, `OUTPUT_STALE`) respond at once with `PatchRejected`. Failures detected while
   stepping (old-image *CRC* mismatch → `OldImageMismatch`; resume-verification, chunk, or final-image errors →
   `ChunkFailed`) complete the deferred command with EXECUTION_ERROR. For final-image errors (`PATCH_SIZE_MISMATCH`,
@@ -242,13 +250,14 @@ possible without touching the patch payload.
 | `PatchComplete` | activity high | New image written and verified |
 | `PatchAborted` | activity high | Operator abort |
 | `AbortIgnored` | warning low | `ABORT_PATCH` received while not patching |
+| `StateEntered` | activity low | The lifecycle entered the given `DeltaPatchState` (same value as the `State` channel) |
 | `SignalDropped` | warning high | A state-machine signal found the component queue full of commands; `tick`/`stageDone`/`fail` are recovered on the next tick, a dropped `start` answers its `APPLY_PATCH` `BUSY` and unbinds, a dropped `abort` answers its `ABORT_PATCH` `BUSY` |
 
 ## Telemetry
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `State` | `DeltaPatchState` | IDLE / VERIFY_NEW / VERIFY_OLD / PATCHING / VERIFY_FINAL / COMPLETE / FAILED (the `DeltaPatchMachine` state) |
+| `State` | `DeltaPatchState` | IDLE / VERIFY_RESUME / VERIFY_OLD / PATCHING / VERIFY_FINAL (the `DeltaPatchMachine` state; IDLE between patches) |
 | `ChunksDone` | U32 | Chunks verified or written |
 | `ChunksTotal` | U32 | Chunk count from header |
 | `BytesWritten` | FwSizeType | New-image bytes written or verified so far (chunk granularity) |

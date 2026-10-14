@@ -91,7 +91,7 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Overflow hook answers a dropped abort directly
     void hookAnswersDroppedAbort();
 
-    //! Abort dispatched with the completing tick: answered from COMPLETE
+    //! Abort dispatched with the completing tick: answered from IDLE as ignored
     void abortOvertakenByCompletion();
 
     //! Queue-full commands are answered BUSY immediately via the overflow hook
@@ -112,7 +112,7 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! A rejected header does not leave an empty new_file behind
     void badHeaderLeavesNoOutput();
 
-    //! new_file replaced by another file before read-back is reported NEW_IMAGE_MISMATCH, not COMPLETE
+    //! new_file replaced by another file before read-back is reported NEW_IMAGE_MISMATCH, not PatchComplete
     void outputReplacedBeforeVerify();
 
   private:

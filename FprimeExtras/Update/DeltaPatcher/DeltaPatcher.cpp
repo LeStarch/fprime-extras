@@ -97,7 +97,6 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
     if (!opened) {
         this->closeMedia();
         this->rejectApply(opCode, cmdSeq, DeltaPatchStatus::OPEN_FAILED, Fw::CmdResponse::EXECUTION_ERROR);
-        this->deltaPatchMachine_sendSignal_reject();
         return;
     }
 
@@ -110,7 +109,6 @@ void DeltaPatcher ::APPLY_PATCH_cmdHandler(FwOpcodeType opCode,
             (void)Os::FileSystem::removeFile(new_file.toChar());
         }
         this->rejectApply(opCode, cmdSeq, DeltaPatcher::toStatus(status), Fw::CmdResponse::EXECUTION_ERROR);
-        this->deltaPatchMachine_sendSignal_reject();
         return;
     }
 
@@ -149,12 +147,12 @@ void DeltaPatcher ::ABORT_PATCH_cmdOverflowHook(FwOpcodeType opCode, U32 cmdSeq)
 // Implementations for internal state machine actions
 // ----------------------------------------------------------------------
 
-void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyNew(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyResume(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
     DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
     // Evaluate the delegate before reading `result`: argument evaluation order is
     // unspecified
-    const DeltaCodec::Status status = this->m_codec.verifyNew(result);
+    const DeltaCodec::Status status = this->m_codec.verifyResume(result);
     this->reportStep(status, result);
 }
 
@@ -185,34 +183,31 @@ void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyFinal(SmId smId, Upd
     this->reportStep(status, result);
 }
 
-void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmVerifyNew(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+void DeltaPatcher ::Update_DeltaPatchMachine_action_enterIdle(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
-    this->tlmWrite_State(DeltaPatchState::VERIFY_NEW);
+    this->reportState(DeltaPatchState::IDLE);
 }
 
-void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+void DeltaPatcher ::Update_DeltaPatchMachine_action_enterVerifyResume(SmId smId,
+                                                                      Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
-    this->tlmWrite_State(DeltaPatchState::VERIFY_OLD);
+    this->reportState(DeltaPatchState::VERIFY_RESUME);
 }
 
-void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmPatching(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+void DeltaPatcher ::Update_DeltaPatchMachine_action_enterVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
-    this->tlmWrite_State(DeltaPatchState::PATCHING);
+    this->reportState(DeltaPatchState::VERIFY_OLD);
 }
 
-void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmVerifyFinal(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+void DeltaPatcher ::Update_DeltaPatchMachine_action_enterPatching(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
-    this->tlmWrite_State(DeltaPatchState::VERIFY_FINAL);
+    this->reportState(DeltaPatchState::PATCHING);
 }
 
-void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmComplete(SmId smId, Update_DeltaPatchMachine::Signal signal) {
+void DeltaPatcher ::Update_DeltaPatchMachine_action_enterVerifyFinal(SmId smId,
+                                                                     Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
-    this->tlmWrite_State(DeltaPatchState::COMPLETE);
-}
-
-void DeltaPatcher ::Update_DeltaPatchMachine_action_tlmFailed(SmId smId, Update_DeltaPatchMachine::Signal signal) {
-    FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
-    this->tlmWrite_State(DeltaPatchState::FAILED);
+    this->reportState(DeltaPatchState::VERIFY_FINAL);
 }
 
 void DeltaPatcher ::Update_DeltaPatchMachine_action_reportResumed(SmId smId, Update_DeltaPatchMachine::Signal signal) {
@@ -255,9 +250,6 @@ void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAborted(SmId smId,
     this->log_ACTIVITY_HI_PatchAborted(static_cast<U32>(this->m_codec.chunkIndex()));
     this->completePending(DeltaPatchStatus::ABORTED, Fw::CmdResponse::EXECUTION_ERROR);
     this->cmdResponse_out(value.get_opCode(), value.get_cmdSeq(), Fw::CmdResponse::OK);
-    // IDLE has no entry action (the initial transition runs before ports are
-    // connected), so report it here
-    this->tlmWrite_State(DeltaPatchState::IDLE);
 }
 
 void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAbortIgnored(SmId smId,
@@ -265,7 +257,7 @@ void DeltaPatcher ::Update_DeltaPatchMachine_action_reportAbortIgnored(SmId smId
                                                                        const Update::DeltaAbortRequest& value) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
     // The patch ended (an earlier abort, a failure or completion) between command
-    // dispatch and signal delivery
+    // dispatch and signal delivery; the machine is back in IDLE
     this->ignoreAbort(value.get_opCode(), value.get_cmdSeq());
 }
 
@@ -274,9 +266,8 @@ void DeltaPatcher ::deltaPatchMachine_stateMachineOverflowHook(SmId smId,
                                                                Fw::SerialBufferBase& buffer) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
     this->log_WARNING_HI_SignalDropped(static_cast<U32>(signal));
-    // tick, stageDone and fail are re-derived from the codec on the next tick and
-    // reject only refreshes telemetry; start and abort carry a command that must
-    // still be answered
+    // tick, stageDone and fail are re-derived from the codec on the next tick;
+    // start and abort carry a command that must still be answered
     if (signal == static_cast<FwEnumStoreType>(Update_DeltaPatchMachine::Signal::start)) {
         // The machine never saw the patch: unbind and answer the APPLY_PATCH
         // recorded in m_pending (SignalDropped(start) is the unique trace of this
@@ -296,6 +287,8 @@ void DeltaPatcher ::deltaPatchMachine_stateMachineOverflowHook(SmId smId,
 
 void DeltaPatcher ::Update_DeltaPatchMachine_action_doRelease(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    // Idempotent: runs on every IDLE entry (including the initial transition,
+    // before any media is open) and again ahead of reportComplete
     this->m_codec.reset();
     this->closeMedia();
 }
@@ -332,6 +325,11 @@ void DeltaPatcher ::reportStep(DeltaCodec::Status status, DeltaCodec::StepResult
     }
 }
 
+void DeltaPatcher ::reportState(DeltaPatchState state) {
+    this->log_ACTIVITY_LO_StateEntered(state);
+    this->tlmWrite_State(state);
+}
+
 void DeltaPatcher ::rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatus status, Fw::CmdResponse response) {
     this->log_WARNING_HI_PatchRejected(status);
     this->tlmWrite_LastStatus(status);
@@ -339,7 +337,7 @@ void DeltaPatcher ::rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatu
 }
 
 void DeltaPatcher ::ignoreAbort(FwOpcodeType opCode, U32 cmdSeq) {
-    this->log_WARNING_LO_AbortIgnored(DeltaPatcher::toState(this->deltaPatchMachine_getState()));
+    this->log_WARNING_LO_AbortIgnored();
     this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
 }
 
@@ -439,18 +437,14 @@ DeltaPatchState DeltaPatcher ::toState(Update_DeltaPatchMachine::State state) {
     switch (state) {
         case Update_DeltaPatchMachine::State::IDLE:
             return DeltaPatchState::IDLE;
-        case Update_DeltaPatchMachine::State::VERIFY_NEW:
-            return DeltaPatchState::VERIFY_NEW;
+        case Update_DeltaPatchMachine::State::VERIFY_RESUME:
+            return DeltaPatchState::VERIFY_RESUME;
         case Update_DeltaPatchMachine::State::VERIFY_OLD:
             return DeltaPatchState::VERIFY_OLD;
         case Update_DeltaPatchMachine::State::PATCHING:
             return DeltaPatchState::PATCHING;
         case Update_DeltaPatchMachine::State::VERIFY_FINAL:
             return DeltaPatchState::VERIFY_FINAL;
-        case Update_DeltaPatchMachine::State::COMPLETE:
-            return DeltaPatchState::COMPLETE;
-        case Update_DeltaPatchMachine::State::FAILED:
-            return DeltaPatchState::FAILED;
         default:
             FW_ASSERT(0, static_cast<FwAssertArgType>(state));
             return DeltaPatchState::IDLE;

@@ -95,7 +95,7 @@ public:
 //! fails and latches.
 class TestCodec {
 public:
-  enum State { IDLE, VERIFY_NEW, VERIFY_OLD, PATCHING, VERIFY_FINAL, COMPLETE, FAILED };
+  enum State { IDLE, VERIFY_RESUME, VERIFY_OLD, PATCHING, VERIFY_FINAL, COMPLETE, FAILED };
 
   explicit TestCodec(DeltaCoder &coder)
       : codec(coder), m_state(IDLE), m_last(DeltaCodec::OP_OK) {}
@@ -106,7 +106,7 @@ public:
       this->m_state = FAILED;
       return this->m_last;
     }
-    this->m_state = this->codec.hasOutputToVerify() ? VERIFY_NEW : VERIFY_OLD;
+    this->m_state = this->codec.hasOutputToVerify() ? VERIFY_RESUME : VERIFY_OLD;
     return DeltaCodec::OP_OK;
   }
 
@@ -115,8 +115,8 @@ public:
     DeltaCodec::Status status = DeltaCodec::OP_OK;
     State next = this->m_state;
     switch (this->m_state) {
-    case VERIFY_NEW:
-      status = this->codec.verifyNew(result);
+    case VERIFY_RESUME:
+      status = this->codec.verifyResume(result);
       next = VERIFY_OLD;
       break;
     case VERIFY_OLD:
@@ -428,7 +428,7 @@ TEST(DeltaCodec, ResumeSkipsVerifiedChunks) {
   newMedia.data[3 * TestVectors::CHUNK_BYTES + 5] ^= 0xFF;
   TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_RESUME);
   U32 steps = 0;
   ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);
   EXPECT_EQ(codec.state(), TestCodec::COMPLETE);
@@ -973,11 +973,11 @@ TEST(DeltaCodec, VerifySpansSteps) {
   newMedia.data[chunkBytes + 2000] ^= 0xFF;
   TestCodec codec(coder);
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_RESUME);
 
   // Step 1: chunk 0 (3000 B) verified, 1096 B of chunk 1 read
   EXPECT_EQ(codec.step(), DeltaCodec::OP_OK);
-  EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
+  EXPECT_EQ(codec.state(), TestCodec::VERIFY_RESUME);
   EXPECT_EQ(codec.resumedChunks(), 1u);
   // Step 2: chunk 1 completes and fails its CRC -> verification stops, old
   // image check begins
@@ -1110,17 +1110,17 @@ TEST(DeltaCodec, StagesIdempotentAfterDone) {
   EXPECT_EQ(codec.codec.verifyFinal(result), DeltaCodec::OP_OK);
   EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
 
-  // Resume over the finished output: verifyNew is the stage that runs, and
+  // Resume over the finished output: verifyResume is the stage that runs, and
   // it too must report STAGE_DONE again when re-called
   ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
   ASSERT_TRUE(codec.codec.hasOutputToVerify());
   result = DeltaCodec::IN_PROGRESS;
   for (U32 i = 0; i < MAX_CALLS && result != DeltaCodec::STAGE_DONE; i++) {
-    ASSERT_EQ(codec.codec.verifyNew(result), DeltaCodec::OP_OK);
+    ASSERT_EQ(codec.codec.verifyResume(result), DeltaCodec::OP_OK);
   }
   ASSERT_EQ(result, DeltaCodec::STAGE_DONE);
   result = DeltaCodec::IN_PROGRESS;
-  EXPECT_EQ(codec.codec.verifyNew(result), DeltaCodec::OP_OK);
+  EXPECT_EQ(codec.codec.verifyResume(result), DeltaCodec::OP_OK);
   EXPECT_EQ(result, DeltaCodec::STAGE_DONE);
   EXPECT_EQ(codec.codec.resumedChunks(), codec.codec.chunkCount());
 }
@@ -1364,7 +1364,7 @@ TEST(DeltaCodec, ClassifiesShrunkMedia) {
     MemoryMedia newMedia(TestVectors::NEW_IMAGE, 2 * TestVectors::CHUNK_BYTES);
     TestCodec codec(coder);
     ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
-    EXPECT_EQ(codec.state(), TestCodec::VERIFY_NEW);
+    EXPECT_EQ(codec.state(), TestCodec::VERIFY_RESUME);
     newMedia.data.resize(10); // output vanished under us
     U32 steps = 0;
     ASSERT_EQ(run(codec, steps), DeltaCodec::OP_OK);

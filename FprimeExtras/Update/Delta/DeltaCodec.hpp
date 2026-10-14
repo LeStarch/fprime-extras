@@ -21,7 +21,7 @@ namespace Update {
 //! held in `patch` media to the `oldImage` media producing the `newImage`
 //! media. The engine is the work delegate of the Update.DeltaPatchMachine state
 //! machine: it owns no lifecycle state of its own. The caller runs the stages
-//! in order — begin(), then verifyNew() (if hasOutputToVerify()), verifyOld(),
+//! in order — begin(), then verifyResume() (if hasOutputToVerify()), verifyOld(),
 //! patchChunk(), verifyFinal() — calling each stage function once per tick
 //! until it reports STAGE_DONE. Each call is bounded to one chunk (or
 //! DELTA_VERIFY_BYTES_PER_STEP bytes of CRC verification) and at most
@@ -105,7 +105,7 @@ class DeltaCodec final {
     //! reset().
     Status begin(DeltaMedia& oldImage, DeltaMedia& patch, DeltaMedia& newImage);
 
-    //! True when the existing new image holds whole chunks that verifyNew() must
+    //! True when the existing new image holds whole chunks that verifyResume() must
     //! check before patching (resume)
     bool hasOutputToVerify() const { return this->m_progress.verifyChunks > 0; }
 
@@ -115,7 +115,7 @@ class DeltaCodec final {
     //! Chunks whose stored bytes match the chunk CRC in the patch are skipped;
     //! the first chunk that does not match (or cannot be read) is where patching
     //! restarts.
-    Status verifyNew(StepResult& result);
+    Status verifyResume(StepResult& result);
 
     //! Stage 2: CRC-verify up to DELTA_VERIFY_BYTES_PER_STEP bytes of the old
     //! image against the header

@@ -115,8 +115,12 @@ def test_apply_patch_nominal(fprime_test_api, images):
         [NEW_FILE, len(new), zlib.crc32(new) & 0xFFFFFFFF],
     )
     assert Path(NEW_FILE).read_bytes() == new
+    # The machine returns to IDLE once the patch is complete; the outcome is the event + LastStatus
     fprime_test_api.assert_telemetry(
-        patcher(fprime_test_api, "State"), "COMPLETE", timeout=10
+        patcher(fprime_test_api, "State"), "IDLE", timeout=10
+    )
+    fprime_test_api.assert_telemetry(
+        patcher(fprime_test_api, "LastStatus"), "OP_OK", timeout=10
     )
     fprime_test_api.assert_telemetry(
         patcher(fprime_test_api, "ChunksDone"), chunks, timeout=10
@@ -187,7 +191,7 @@ def test_apply_patch_corrupt_chunk_then_resume(fprime_test_api, images):
     failure = predicates.is_a_member_of(["CHUNK_CRC", "BAD_OPCODE", "TRUNCATED"])
     fprime_test_api.assert_event(patcher(fprime_test_api, "ChunkFailed"), [1, failure])
     fprime_test_api.assert_telemetry(
-        patcher(fprime_test_api, "State"), "FAILED", timeout=10
+        patcher(fprime_test_api, "State"), "IDLE", timeout=10
     )
 
     with tempfile.TemporaryDirectory() as tmp:

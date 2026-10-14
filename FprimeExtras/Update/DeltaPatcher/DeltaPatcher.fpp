@@ -94,16 +94,19 @@ module Update {
         ) severity activity high format "Patch aborted at chunk {}"
 
         @ ABORT_PATCH was received while no patch was in progress
-        event AbortIgnored(
-            current: DeltaPatchState @< Current patcher state
-        ) severity warning low format "ABORT_PATCH ignored: patcher state is {}"
+        event AbortIgnored() severity warning low format "ABORT_PATCH ignored: no patch in progress"
+
+        @ The patch lifecycle entered a state; the State channel carries the same value
+        event StateEntered(
+            entered: DeltaPatchState @< State entered
+        ) severity activity low format "Patcher entered {}"
 
         @ A state-machine signal found the component queue full of commands and was dropped
         event SignalDropped(
             signalId: U32 @< DeltaPatchMachine signal id
         ) severity warning high format "State machine signal {} dropped: queue full"
 
-        @ Current patcher state
+        @ Current patcher state (DeltaPatchMachine state; IDLE between patches)
         telemetry State: DeltaPatchState update on change
 
         @ Chunks applied or verified so far

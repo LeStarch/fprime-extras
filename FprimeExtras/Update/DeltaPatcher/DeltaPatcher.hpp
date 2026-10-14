@@ -103,13 +103,13 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     // Implementations for internal state machine actions
     // ----------------------------------------------------------------------
 
-    //! Implementation for action doVerifyNew of state machine
+    //! Implementation for action doVerifyResume of state machine
     //! Update_DeltaPatchMachine
     //!
-    //! Delegate one unit of resume verification to DeltaCodec::verifyNew()
-    void Update_DeltaPatchMachine_action_doVerifyNew(SmId smId,                               //!< The state machine id
-                                                     Update_DeltaPatchMachine::Signal signal  //!< The signal
-                                                     ) override;
+    //! Delegate one unit of resume verification to DeltaCodec::verifyResume()
+    void Update_DeltaPatchMachine_action_doVerifyResume(SmId smId,  //!< The state machine id
+                                                        Update_DeltaPatchMachine::Signal signal  //!< The signal
+                                                        ) override;
 
     //! Implementation for action doVerifyOld of state machine
     //! Update_DeltaPatchMachine
@@ -135,17 +135,14 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
                                                        Update_DeltaPatchMachine::Signal signal  //!< The signal
                                                        ) override;
 
-    //! Implementations for the per-state entry actions tlmVerifyNew /
-    //! tlmVerifyOld / tlmPatching / tlmVerifyFinal / tlmComplete / tlmFailed of
-    //! state machine Update_DeltaPatchMachine
-    //!
-    //! Report the state just entered on the State telemetry channel
-    void Update_DeltaPatchMachine_action_tlmVerifyNew(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
-    void Update_DeltaPatchMachine_action_tlmVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
-    void Update_DeltaPatchMachine_action_tlmPatching(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
-    void Update_DeltaPatchMachine_action_tlmVerifyFinal(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
-    void Update_DeltaPatchMachine_action_tlmComplete(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
-    void Update_DeltaPatchMachine_action_tlmFailed(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    //! Implementations for the per-state entry actions enterIdle / enterVerifyResume /
+    //! enterVerifyOld / enterPatching / enterVerifyFinal of state machine
+    //! Update_DeltaPatchMachine: each announces its state through reportState()
+    void Update_DeltaPatchMachine_action_enterIdle(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_enterVerifyResume(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_enterVerifyOld(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_enterPatching(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
+    void Update_DeltaPatchMachine_action_enterVerifyFinal(SmId smId, Update_DeltaPatchMachine::Signal signal) override;
 
     //! Implementation for action reportResumed of state machine
     //! Update_DeltaPatchMachine
@@ -232,6 +229,10 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Publish progress telemetry and turn a delegate result into a stageDone /
     //! fail signal
     void reportStep(DeltaCodec::Status status, DeltaCodec::StepResult result);
+
+    //! Announce a state entry: StateEntered event and State channel (single
+    //! emission site, called by the enter* actions)
+    void reportState(DeltaPatchState state);
 
     //! Reject APPLY_PATCH before a patch is bound
     void rejectApply(FwOpcodeType opCode, U32 cmdSeq, DeltaPatchStatus status, Fw::CmdResponse response);

@@ -120,19 +120,26 @@ void DeltaPatcherTester ::nominal() {
   ASSERT_EVENTS_PatchResumed_SIZE(0);
   ASSERT_from_patchComplete_SIZE(1);
   ASSERT_from_patchComplete(0, Fw::String(this->m_new.c_str()), NEW_CRC);
-  ASSERT_TLM_State(this->tlmHistory_State->size() - 1,
-                   DeltaPatchState::COMPLETE);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
   ASSERT_TLM_LastStatus(this->tlmHistory_LastStatus->size() - 1,
                         DeltaPatchStatus::OP_OK);
   ASSERT_TLM_BytesWritten(this->tlmHistory_BytesWritten->size() - 1,
                           NEW_IMAGE_SIZE);
   ASSERT_TLM_ChunksDone(this->tlmHistory_ChunksDone->size() - 1, CHUNK_COUNT);
-  // State channel is update-on-change: the full nominal sequence
+  // Every state entry is announced on both the State channel and the
+  // StateEntered event: the full nominal sequence ends back in IDLE
   ASSERT_TLM_State_SIZE(4);
   ASSERT_TLM_State(0, DeltaPatchState::VERIFY_OLD);
   ASSERT_TLM_State(1, DeltaPatchState::PATCHING);
   ASSERT_TLM_State(2, DeltaPatchState::VERIFY_FINAL);
-  ASSERT_TLM_State(3, DeltaPatchState::COMPLETE);
+  ASSERT_TLM_State(3, DeltaPatchState::IDLE);
+  ASSERT_EVENTS_StateEntered_SIZE(4);
+  ASSERT_EVENTS_StateEntered(0, DeltaPatchState::VERIFY_OLD);
+  ASSERT_EVENTS_StateEntered(1, DeltaPatchState::PATCHING);
+  ASSERT_EVENTS_StateEntered(2, DeltaPatchState::VERIFY_FINAL);
+  ASSERT_EVENTS_StateEntered(3, DeltaPatchState::IDLE);
+  // The machine rests in IDLE with nothing bound
+  ASSERT_FALSE(this->component.isPatchBound());
 
   const std::string produced = readFile(this->m_new);
   ASSERT_EQ(produced.size(), NEW_IMAGE_SIZE);
@@ -165,7 +172,9 @@ void DeltaPatcherTester ::openFailed() {
   ASSERT_CMD_RESPONSE_SIZE(1);
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
                       Fw::CmdResponse::EXECUTION_ERROR);
-  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::FAILED);
+  // A rejection never reaches the machine: it stays in IDLE, nothing announced
+  ASSERT_TLM_State_SIZE(0);
+  ASSERT_EVENTS_StateEntered_SIZE(0);
   ASSERT_EVENTS_PatchStarted_SIZE(0);
 }
 
@@ -263,7 +272,8 @@ void DeltaPatcherTester ::chunkFailed() {
   ASSERT_TLM_LastStatus(this->tlmHistory_LastStatus->size() - 1, failStatus);
   ASSERT_EVENTS_PatchComplete_SIZE(0);
   ASSERT_from_patchComplete_SIZE(0);
-  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::FAILED);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
+  ASSERT_FALSE(this->component.isPatchBound());
   ASSERT_TLM_ChunksDone(this->tlmHistory_ChunksDone->size() - 1, target);
 
   // Repairing the patch and re-applying resumes from the verified prefix and
@@ -281,7 +291,7 @@ void DeltaPatcherTester ::chunkFailed() {
   ASSERT_EQ(produced.size(), NEW_IMAGE_SIZE);
   ASSERT_EQ(0, memcmp(produced.data(), NEW_IMAGE, NEW_IMAGE_SIZE));
 
-  // Abort after completion is ignored and reports the COMPLETE state
+  // Abort after completion is ignored (the machine is back in IDLE)
   this->clearHistory();
   this->sendCmd_ABORT_PATCH(0, 2);
   this->invoke_to_run(0, 0);
@@ -289,9 +299,8 @@ void DeltaPatcherTester ::chunkFailed() {
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_ABORT_PATCH, 2,
                       Fw::CmdResponse::VALIDATION_ERROR);
   ASSERT_EVENTS_AbortIgnored_SIZE(1);
-  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::COMPLETE);
 
-  // Re-applying after success resumes from COMPLETE through the verify path
+  // Re-applying after success goes through the resume path and back to IDLE
   this->clearHistory();
   this->apply(3);
   this->runUntilResponse();
@@ -299,12 +308,11 @@ void DeltaPatcherTester ::chunkFailed() {
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 3,
                       Fw::CmdResponse::OK);
   ASSERT_EVENTS_PatchComplete_SIZE(1);
-  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_NEW);
-  ASSERT_TLM_State(this->tlmHistory_State->size() - 1,
-                   DeltaPatchState::COMPLETE);
+  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_RESUME);
+  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::IDLE);
   ASSERT_EQ(readFile(this->m_new).size(), NEW_IMAGE_SIZE);
 
-  // A rejected re-apply after success: COMPLETE --reject--> FAILED, output kept
+  // A rejected re-apply after success leaves the machine in IDLE, output kept
   const U8 garbage[16] = {0};
   writeFile(this->m_patch, garbage, sizeof(garbage));
   this->clearHistory();
@@ -312,7 +320,10 @@ void DeltaPatcherTester ::chunkFailed() {
   ASSERT_EVENTS_PatchRejected_SIZE(1);
   ASSERT_EVENTS_PatchRejected(0, DeltaPatchStatus::BAD_HEADER);
   ASSERT_CMD_RESPONSE_SIZE(1);
-  ASSERT_TLM_State(this->tlmHistory_State->size() - 1, DeltaPatchState::FAILED);
+  ASSERT_TLM_State_SIZE(0);
+  ASSERT_EVENTS_StateEntered_SIZE(0);
+  ASSERT_EQ(this->component.deltaPatchMachine_getState(),
+            DeltaPatcher::Update_DeltaPatchMachine::State::IDLE);
   ASSERT_EQ(readFile(this->m_new).size(), NEW_IMAGE_SIZE);
 }
 
@@ -350,11 +361,14 @@ void DeltaPatcherTester ::abortAndResume() {
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 3,
                       Fw::CmdResponse::OK);
   ASSERT_TLM_State_SIZE(5);
-  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_NEW);
+  ASSERT_TLM_State(0, DeltaPatchState::VERIFY_RESUME);
   ASSERT_TLM_State(1, DeltaPatchState::VERIFY_OLD);
   ASSERT_TLM_State(2, DeltaPatchState::PATCHING);
   ASSERT_TLM_State(3, DeltaPatchState::VERIFY_FINAL);
-  ASSERT_TLM_State(4, DeltaPatchState::COMPLETE);
+  ASSERT_TLM_State(4, DeltaPatchState::IDLE);
+  ASSERT_EVENTS_StateEntered_SIZE(5);
+  ASSERT_EVENTS_StateEntered(0, DeltaPatchState::VERIFY_RESUME);
+  ASSERT_EVENTS_StateEntered(4, DeltaPatchState::IDLE);
   ASSERT_EVENTS_PatchResumed_SIZE(1);
   ASSERT_EVENTS_PatchResumed(0, this->m_new.c_str(), written, CHUNK_COUNT);
   ASSERT_EVENTS_PatchComplete_SIZE(1);
@@ -379,7 +393,6 @@ void DeltaPatcherTester ::abortDuringVerify() {
   ASSERT_EVENTS_PatchAborted(0, 0u);
   ASSERT_EVENTS_PatchComplete_SIZE(0);
   ASSERT_EVENTS_AbortIgnored_SIZE(1);
-  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::IDLE);
   ASSERT_CMD_RESPONSE_SIZE(3);
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
                       Fw::CmdResponse::EXECUTION_ERROR);
@@ -540,7 +553,7 @@ void DeltaPatcherTester ::hookAnswersDroppedAbort() {
 
 void DeltaPatcherTester ::abortOvertakenByCompletion() {
   // An ABORT_PATCH dispatched in the same drain as the tick that completes
-  // read-back: the abort signal reaches the machine in COMPLETE and must be
+  // read-back: the abort signal reaches the machine back in IDLE and must be
   // answered from there
   this->apply(1);
   for (U32 i = 0;
@@ -570,7 +583,6 @@ void DeltaPatcherTester ::abortOvertakenByCompletion() {
   this->invoke_to_run(0, 0);
   ASSERT_EVENTS_PatchComplete_SIZE(1);
   ASSERT_EVENTS_AbortIgnored_SIZE(1);
-  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::COMPLETE);
   ASSERT_CMD_RESPONSE_SIZE(2);
   ASSERT_CMD_RESPONSE(0, DeltaPatcher::OPCODE_APPLY_PATCH, 1,
                       Fw::CmdResponse::OK);
@@ -587,7 +599,6 @@ void DeltaPatcherTester ::abortIdle() {
                       Fw::CmdResponse::VALIDATION_ERROR);
   ASSERT_EVENTS_SIZE(1);
   ASSERT_EVENTS_AbortIgnored_SIZE(1);
-  ASSERT_EVENTS_AbortIgnored(0, DeltaPatchState::IDLE);
 }
 
 void DeltaPatcherTester ::queueOverflow() {

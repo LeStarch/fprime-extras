@@ -255,7 +255,7 @@ DeltaCodec::Status DeltaCodec::verifySlice(DeltaMedia& media,
     return OP_OK;
 }
 
-DeltaCodec::Status DeltaCodec::verifyNew(StepResult& result) {
+DeltaCodec::Status DeltaCodec::verifyResume(StepResult& result) {
     FW_ASSERT(this->m_new != nullptr);
     result = IN_PROGRESS;
     this->m_ioCount = 0;
