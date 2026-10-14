@@ -433,22 +433,4 @@ DeltaPatchStatus DeltaPatcher ::toStatus(DeltaCodec::Status status) {
     }
 }
 
-DeltaPatchState DeltaPatcher ::toState(Update_DeltaPatchMachine::State state) {
-    switch (state) {
-        case Update_DeltaPatchMachine::State::IDLE:
-            return DeltaPatchState::IDLE;
-        case Update_DeltaPatchMachine::State::VERIFY_RESUME:
-            return DeltaPatchState::VERIFY_RESUME;
-        case Update_DeltaPatchMachine::State::VERIFY_OLD:
-            return DeltaPatchState::VERIFY_OLD;
-        case Update_DeltaPatchMachine::State::PATCHING:
-            return DeltaPatchState::PATCHING;
-        case Update_DeltaPatchMachine::State::VERIFY_FINAL:
-            return DeltaPatchState::VERIFY_FINAL;
-        default:
-            FW_ASSERT(0, static_cast<FwAssertArgType>(state));
-            return DeltaPatchState::IDLE;
-    }
-}
-
 }  // namespace Update

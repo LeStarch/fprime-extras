@@ -99,14 +99,15 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   `MAX_DISPATCH_PER_TICK` commands per tick, every `tick` is dropped and the patch makes no progress until the flood
   ends (each excess command is answered `BUSY`); `init()` asserts the instance queue holds at least
   `2 * MAX_DISPATCH_PER_TICK` messages so a correctly sized deployment recovers on the first quiet tick. An `abort` delivered after the patch has already ended (a second abort in the same tick, or a failure
-  that overtook it) is answered `VALIDATION_ERROR` with `AbortIgnored` by the resting states. A tick
+  that overtook it) is answered `VALIDATION_ERROR` with `AbortIgnored` by IDLE. A tick
   verifies at most `DELTA_VERIFY_BYTES_PER_STEP` bytes or processes one chunk of at most `DELTA_MAX_CHUNK_BYTES` output bytes decoded from at most
   `DELTA_MAX_CODED_CHUNK_BYTES` patch bytes; headers exceeding these caps (or `DELTA_MAX_IMAGE_SIZE`) are rejected
   with `BAD_HEADER`/`BAD_OPCODE`. Because a coder may expand its input (LZSS up to 129:1), the decoded operation
   stream is additionally bounded by construction: a `SEEK` must be followed by a producing op, so a chunk never
   parses more than `2 * chunk_bytes` operations before it is rejected with `BAD_OPCODE`. Per-tick work is thus
   bounded by flight configuration rather than by the patch. Media I/O is bounded separately: a step issues at most
-  `DELTA_MAX_IO_PER_STEP` media reads/writes (plus the up-to-three calls of the operation in flight) and a chunk
+  `DELTA_MAX_IO_PER_STEP` media reads/writes (plus the calls of the operation in flight, at most five: up to three
+  patch reads to fill the decode window, one old-image read and one write) and a chunk
   that needs more carries over to the next tick; adjacent `COPY`/`ADD` reads are served from a `DELTA_OLD_BUFFER_SIZE`
   old-image cache so operation-dense patches do not cost one media read per operation. The step performs
   `Os::File` I/O on the rate-group thread (`NO_WAIT` writes; the media is flushed once per committed chunk and once

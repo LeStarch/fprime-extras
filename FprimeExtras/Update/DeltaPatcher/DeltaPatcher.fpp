@@ -70,7 +70,7 @@ module Update {
         @ The on-board old image does not match the patch header
         event OldImageMismatch(
             expected_crc: U32 @< CRC declared by the patch
-            actual_crc: U32 @< CRC of the on-board old image
+            actual_crc: U32 @< CRC of the on-board old image (of the bytes read when it could not be read to expected_size)
             expected_size: FwSizeType @< Size declared by the patch
             actual_size: FwSizeType @< Size of the on-board old image
         ) severity warning high format "Old image mismatch: crc {x} != {x}, size {} != {}"

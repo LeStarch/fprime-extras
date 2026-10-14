@@ -35,7 +35,8 @@ module Update {
         SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
     }
 
-    @ State of the DeltaPatcher (mirrors the Update.DeltaPatchMachine states; values 0-3 predate the verify states)
+    @ State of the DeltaPatcher (mirrors the Update.DeltaPatchMachine states). Wire values 2 and 3 were
+    @ FAILED/COMPLETE before the verify states existed: dictionaries from that encoding are not compatible.
     enum DeltaPatchState : U8 {
         IDLE,           @< No patch bound; the outcome of the last patch is in LastStatus
         PATCHING,       @< Applying chunks

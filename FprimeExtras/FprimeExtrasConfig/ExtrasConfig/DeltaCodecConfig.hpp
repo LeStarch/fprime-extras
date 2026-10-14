@@ -21,20 +21,21 @@ constexpr FwSizeType DELTA_OUTPUT_BUFFER_SIZE = 128;
 //! Old-image bytes cached per media read so that short adjacent COPY/ADD operations share one read
 constexpr FwSizeType DELTA_OLD_BUFFER_SIZE = 128;
 
-//! Bytes CRC-verified (old image, or existing new image on resume) per DeltaCodec::step()
+//! Bytes CRC-verified (old image, or existing new image on resume) per stage call
+//! (DeltaCodec::verifyResume() / verifyOld() / verifyFinal())
 constexpr FwSizeType DELTA_VERIFY_BYTES_PER_STEP = 4096;
 
-//! Most media reads and writes issued in one DeltaCodec::step() while applying
-//! a chunk; when reached the chunk continues on the next step, so a tick's I/O
+//! Most media reads and writes issued in one DeltaCodec::patchChunk() call while
+//! applying a chunk; when reached the chunk continues on the next call, so a tick's I/O
 //! time is bounded by the media rather than by the patch
 constexpr FwSizeType DELTA_MAX_IO_PER_STEP = 64;
 
 //! Largest chunk_bytes accepted from an SPatch header; one chunk is applied per
-//! DeltaCodec::step(), so this bounds the new-image bytes produced (and
+//! DeltaCodec::patchChunk() call, so this bounds the new-image bytes produced (and
 //! old-image bytes read) in a single rate-group tick
 constexpr U32 DELTA_MAX_CHUNK_BYTES = 8192;
 
-//! Largest coded_len accepted for one chunk; bounds the patch bytes decoded in a single DeltaCodec::step()
+//! Largest coded_len accepted for one chunk; bounds the patch bytes decoded in a single DeltaCodec::patchChunk() call
 constexpr U32 DELTA_MAX_CODED_CHUNK_BYTES = 2 * DELTA_MAX_CHUNK_BYTES;
 
 //! Most operations (including SEEKs) accepted in one chunk; a valid chunk needs at most 2 per output byte

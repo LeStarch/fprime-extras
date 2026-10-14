@@ -188,17 +188,17 @@ DeltaCodec::Status DeltaCodec::readHeader(DeltaMedia& patch) {
     return OP_OK;
 }
 
+// clang-format off
 // Chunk header layout (W = sizeof(FwSizeType), big-endian), one per chunk,
 // ceil(new_size / chunk_bytes) chunks
 //
 //     offset   size        field
-//     0        W           coded_len      payload bytes that follow (0 ..
-//     DELTA_MAX_CODED_CHUNK_BYTES) W        4           output_crc32   CRC32 of
-//     the chunk's decoded output, not of the payload W + 4    coded_len payload
-//     coder stream decoding to the operation stream (see parseOp())
+//     0        W           coded_len      payload bytes that follow (0 .. DELTA_MAX_CODED_CHUNK_BYTES)
+//     W        4           output_crc32   CRC32 of the chunk's decoded output, not of the payload
+//     W + 4    coded_len   payload        coder stream decoding to the operation stream (see parseOp())
 //
-// The chunk's raw output length is not carried: it is min(chunk_bytes, new_size
-// - index * chunk_bytes).
+// The chunk's raw output length is not carried: it is min(chunk_bytes, new_size - index * chunk_bytes).
+// clang-format on
 DeltaCodec::Status DeltaCodec::readChunkHeader(FwSizeType& codedLength, U32& crc) {
     const Progress& progress = this->m_progress;
     FW_ASSERT(progress.patchPos <= this->m_header.patchSize, static_cast<FwAssertArgType>(progress.patchPos));
@@ -283,10 +283,12 @@ DeltaCodec::Status DeltaCodec::verifyResume(StepResult& result) {
             U32 expectedCrc = 0;
             const Status status = this->readChunkHeader(codedLength, expectedCrc);
             if (status != OP_OK) {
-                // Leave the span reset so a re-entered stage re-verifies this chunk
-                // instead of over-running it
+                // Leave the span and the running CRC at the last committed chunk so a
+                // re-entered stage (dropped fail signal) re-verifies this chunk
+                // instead of over-running it or counting its bytes twice
                 this->m_verify.offset = 0;
                 this->m_verify.crc = crcInit();
+                progress.runningCrc = progress.committedCrc;
                 return status;
             }
             if (crcFinal(this->m_verify.crc) == expectedCrc) {
@@ -565,17 +567,18 @@ DeltaCodec::VarintResult DeltaCodec::readVarint(FwSizeType start, U64& value, Fw
     return VARINT_INVALID;
 }
 
-// Operation layout (the decoded chunk payload is a sequence of these; o =
-// new-image offset, c = old cursor, c starts at the chunk's new-image offset)
+// clang-format off
+// Operation layout (the decoded chunk payload is a sequence of these; o = new-image offset,
+// c = old cursor, c starts at the chunk's new-image offset)
 //
 //     +--------+------------------+----------------+
 //     | op U8  | operand varint   | data           |
 //     +--------+------------------+----------------+
-//     COPY 0x00  n (uvar, n > 0)   -                 new[o:o+n] = old[c:c+n];
-//     c += n ADD  0x01  n (uvar, n > 0)   n bytes d[]       new[o+i]   =
-//     old[c+i] + d[i] mod 256; c += n LIT  0x02  n (uvar, n > 0)   n bytes
-//     new[o:o+n] = bytes SEEK 0x03  d (zigzag svar)   -                 c += d,
-//     0 <= c <= old_size; must be followed by COPY/ADD/LIT
+//     COPY 0x00  n (uvar, n > 0)   -                 new[o:o+n] = old[c:c+n]; c += n
+//     ADD  0x01  n (uvar, n > 0)   n bytes d[]       new[o+i]   = old[c+i] + d[i] mod 256; c += n
+//     LIT  0x02  n (uvar, n > 0)   n bytes           new[o:o+n] = bytes
+//     SEEK 0x03  d (zigzag svar)   -                 c += d, 0 <= c <= old_size; must be followed by COPY/ADD/LIT
+// clang-format on
 //
 // n may not exceed the chunk's remaining output; operations never span a chunk
 // boundary; at most DELTA_MAX_OPS_PER_CHUNK operations per chunk. The data

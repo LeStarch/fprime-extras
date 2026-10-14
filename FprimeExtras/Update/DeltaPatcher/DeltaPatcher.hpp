@@ -36,8 +36,8 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     DeltaPatcher(const char* const compName  //!< The component name
     );
 
-    //! Initialize; asserts the queue holds the commands of two drains plus the
-    //! state-machine signals of a tick
+    //! Initialize; asserts the queue holds one drain of commands plus the
+    //! state-machine signals of a tick (2 * MAX_DISPATCH_PER_TICK)
     void init(FwSizeType queueDepth,        //!< The queue depth
               FwEnumStoreType instance = 0  //!< The instance number
     );
@@ -172,8 +172,7 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Implementation for action reportAborted of state machine
     //! Update_DeltaPatchMachine
     //!
-    //! Emit PatchAborted, answer APPLY_PATCH EXECUTION_ERROR and ABORT_PATCH OK,
-    //! report IDLE
+    //! Emit PatchAborted, answer APPLY_PATCH EXECUTION_ERROR and ABORT_PATCH OK
     void Update_DeltaPatchMachine_action_reportAborted(SmId smId,  //!< The state machine id
                                                        Update_DeltaPatchMachine::Signal signal,  //!< The signal
                                                        const Update::DeltaAbortRequest& value    //!< The value
@@ -247,7 +246,7 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
     //! Close all media
     void closeMedia();
 
-    //! Whether a patch is bound (output media open)
+    //! Whether a patch is bound (old-image media open)
     //!
     //! Signals reach the state machine through the component queue, so within one
     //! drain the machine can lag a command handler by one dispatch (patch bound,
@@ -277,9 +276,6 @@ class DeltaPatcher final : public DeltaPatcherComponentBase {
 
     //! Map an engine status onto the reported status enumeration
     static DeltaPatchStatus toStatus(DeltaCodec::Status status);
-
-    //! Map a state-machine state onto the reported state enumeration
-    static DeltaPatchState toState(Update_DeltaPatchMachine::State state);
 
   private:
     // ----------------------------------------------------------------------
