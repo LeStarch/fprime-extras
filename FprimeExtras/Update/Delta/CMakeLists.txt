@@ -39,6 +39,7 @@ register_fprime_ut(
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaRulesTests.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/CoderRules.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/CodecRules.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/StaticRules.cpp"
     DEPENDS
         gtest
         STest

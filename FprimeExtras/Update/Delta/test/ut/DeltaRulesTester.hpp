@@ -79,6 +79,42 @@ class DeltaRulesTester {
     FW_RBT_DEFINE_RULE(DeltaRulesTester, Codec, BadHeader);
     FW_RBT_DEFINE_RULE(DeltaRulesTester, Codec, BadPatchSize);
 
+    // Static rules (Rules/StaticRules.cpp): the former direct unit tests, one
+    // deterministic rule each, run in sequence against every shipped coder
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, CoderGolden);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, LzssHandCrafted);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RleHandCrafted);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ApplyGolden);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ResumeSkipsVerifiedChunks);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ResumeCompleteOutput);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, OutputStale);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsBadHeader);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsPendingCoderState);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsSizeWidthMismatch);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsOversizedGeometry);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsOutOfRangeOperands);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsConsecutiveSeeks);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, VerifySpansSteps);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsOldImageMismatch);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsTruncatedAndOversizedPatch);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsCorruptChunk);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, StagesIdempotentAfterDone);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ResumeReentryAfterHeaderReadFailure);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, MediaErrors);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ReadBackCatchesStorageFaults);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ResetReturnsToIdle);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, FailedChunkNeverCommitsOutput);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, IoBudgetSpansSteps);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ClassifiesShrunkMedia);
+
+    //! Golden vectors for the coder under test (DeltaTestVectors.hpp)
+    const U8* goldenPatch() const;
+    FwSizeType goldenPatchSize() const;
+    const U8* goldenPatchOtherWidth() const;
+    FwSizeType goldenPatchOtherWidthSize() const;
+    const U8* goldenCoded() const;
+    FwSizeType goldenCodedSize() const;
+
     const Counters& counters() const { return this->m_counters; }
     //! Write old image, patch, expected and actual output to <prefix>_{old,patch,new,out}.bin for offline analysis
     void dumpCase(const char* prefix) const;

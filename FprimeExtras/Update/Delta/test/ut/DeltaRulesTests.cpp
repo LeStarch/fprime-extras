@@ -50,6 +50,91 @@ static void randomScenario(DeltaCoder& coder, U32 applications) {
     EXPECT_GT(tester.counters().roundTrips, applications / 100);
 }
 
+// ----------------------------------------------------------------------
+// Static scenario: every deterministic rule once, in order, per coder
+// ----------------------------------------------------------------------
+
+static void staticScenario(DeltaCoder& coder) {
+    DeltaRulesTester tester(coder);
+    DeltaRulesTester::Static__CoderGolden coderGolden;
+    DeltaRulesTester::Static__LzssHandCrafted lzssHandCrafted;
+    DeltaRulesTester::Static__RleHandCrafted rleHandCrafted;
+    DeltaRulesTester::Static__ApplyGolden applyGolden;
+    DeltaRulesTester::Static__ResumeSkipsVerifiedChunks resumeSkipsVerifiedChunks;
+    DeltaRulesTester::Static__ResumeCompleteOutput resumeCompleteOutput;
+    DeltaRulesTester::Static__OutputStale outputStale;
+    DeltaRulesTester::Static__RejectsBadHeader rejectsBadHeader;
+    DeltaRulesTester::Static__RejectsPendingCoderState rejectsPendingCoderState;
+    DeltaRulesTester::Static__RejectsSizeWidthMismatch rejectsSizeWidthMismatch;
+    DeltaRulesTester::Static__RejectsOversizedGeometry rejectsOversizedGeometry;
+    DeltaRulesTester::Static__RejectsOutOfRangeOperands rejectsOutOfRangeOperands;
+    DeltaRulesTester::Static__RejectsConsecutiveSeeks rejectsConsecutiveSeeks;
+    DeltaRulesTester::Static__VerifySpansSteps verifySpansSteps;
+    DeltaRulesTester::Static__RejectsOldImageMismatch rejectsOldImageMismatch;
+    DeltaRulesTester::Static__RejectsTruncatedAndOversizedPatch rejectsTruncatedAndOversizedPatch;
+    DeltaRulesTester::Static__RejectsCorruptChunk rejectsCorruptChunk;
+    DeltaRulesTester::Static__StagesIdempotentAfterDone stagesIdempotentAfterDone;
+    DeltaRulesTester::Static__ResumeReentryAfterHeaderReadFailure resumeReentryAfterHeaderReadFailure;
+    DeltaRulesTester::Static__MediaErrors mediaErrors;
+    DeltaRulesTester::Static__ReadBackCatchesStorageFaults readBackCatchesStorageFaults;
+    DeltaRulesTester::Static__ResetReturnsToIdle resetReturnsToIdle;
+    DeltaRulesTester::Static__FailedChunkNeverCommitsOutput failedChunkNeverCommitsOutput;
+    DeltaRulesTester::Static__IoBudgetSpansSteps ioBudgetSpansSteps;
+    DeltaRulesTester::Static__ClassifiesShrunkMedia classifiesShrunkMedia;
+    STest::Rule<DeltaRulesTester>* rules[] = {
+        &coderGolden,
+        &lzssHandCrafted,
+        &rleHandCrafted,
+        &applyGolden,
+        &resumeSkipsVerifiedChunks,
+        &resumeCompleteOutput,
+        &outputStale,
+        &rejectsBadHeader,
+        &rejectsPendingCoderState,
+        &rejectsSizeWidthMismatch,
+        &rejectsOversizedGeometry,
+        &rejectsOutOfRangeOperands,
+        &rejectsConsecutiveSeeks,
+        &verifySpansSteps,
+        &rejectsOldImageMismatch,
+        &rejectsTruncatedAndOversizedPatch,
+        &rejectsCorruptChunk,
+        &stagesIdempotentAfterDone,
+        &resumeReentryAfterHeaderReadFailure,
+        &mediaErrors,
+        &readBackCatchesStorageFaults,
+        &resetReturnsToIdle,
+        &failedChunkNeverCommitsOutput,
+        &ioBudgetSpansSteps,
+        &classifiesShrunkMedia,
+    };
+    U32 applied = 0;
+    for (FwSizeType i = 0; i < FW_NUM_ARRAY_ELEMENTS(rules); i++) {
+        if (rules[i]->precondition(tester)) {
+            rules[i]->apply(tester);
+            applied++;
+        }
+    }
+    printf("coder %u: applied %u static rules\n", coder.id(), applied);
+    EXPECT_GE(applied,
+              static_cast<U32>(FW_NUM_ARRAY_ELEMENTS(rules)) - 2);  // two hand-crafted rules are coder-specific
+}
+
+TEST(DeltaStatic, None) {
+    DeltaCoderNone coder;
+    staticScenario(coder);
+}
+
+TEST(DeltaStatic, Rle) {
+    DeltaCoderRle coder;
+    staticScenario(coder);
+}
+
+TEST(DeltaStatic, Lzss) {
+    DeltaCoderLzss coder;
+    staticScenario(coder);
+}
+
 static const U32 RANDOM_APPLICATIONS = 50000;
 
 TEST(DeltaRules, RandomNone) {
