@@ -1164,4 +1164,135 @@ void DeltaRulesTester::Static__ClassifiesShrunkMedia__action() {
     }
 }
 
+// ----------------------------------------------------------------------
+// Coverage rules: defensive error paths the golden flows never reach
+// ----------------------------------------------------------------------
+
+bool DeltaRulesTester::Static__RejectsWrongImageCrc__precondition() const {
+    return true;
+}
+
+void DeltaRulesTester::Static__RejectsWrongImageCrc__action() {
+    // A header whose new_crc32 is wrong but whose own CRC is valid: every chunk
+    // verifies, the whole-image check at the end fails
+    DeltaCoder& coder = this->m_coder;
+    const std::vector<U8> oldImage = toVector(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+    std::vector<U8> patch = toVector(this->goldenPatch(), this->goldenPatchSize());
+    patch[DeltaCodec::HDR_NEW_CRC] ^= 0x01;
+    putBe(&patch[DeltaCodec::HDR_CRC], crc32(patch.data(), DeltaCodec::HDR_CRC), sizeof(U32));
+    TestCodec::State state;
+    EXPECT_EQ(applyPatch(coder, patch, oldImage, state), DeltaCodec::NEW_IMAGE_MISMATCH);
+    EXPECT_EQ(state, TestCodec::FAILED);
+}
+
+bool DeltaRulesTester::Static__MediaSizeFaults__precondition() const {
+    return true;
+}
+
+void DeltaRulesTester::Static__MediaSizeFaults__action() {
+    // size() failing on each medium at begin, a patch read failing at begin, and
+    // the output un-sizable at the final read-back
+    DeltaCoder& coder = this->m_coder;
+    for (U32 which = 0; which < 5; which++) {
+        MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+        MemoryMedia patchMedia(this->goldenPatch(), this->goldenPatchSize());
+        MemoryMedia newMedia;
+        TestCodec codec(coder);
+        switch (which) {
+            case 0:
+                oldMedia.failSize = true;
+                break;
+            case 1:
+                newMedia.failSize = true;
+                break;
+            case 2:
+                patchMedia.failSize = true;
+                break;
+            case 3:
+                patchMedia.failReads = true;
+                break;
+            default:
+                break;
+        }
+        if (which < 4) {
+            EXPECT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::READ_ERROR) << "fault " << which;
+            continue;
+        }
+        ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+        U32 guard = 0;
+        for (; guard < 10000 && codec.state() != TestCodec::VERIFY_FINAL && codec.state() != TestCodec::FAILED;
+             guard++) {
+            codec.step();
+        }
+        ASSERT_EQ(codec.state(), TestCodec::VERIFY_FINAL);
+        newMedia.failSize = true;
+        DeltaCodec::Status status = DeltaCodec::OP_OK;
+        for (guard = 0; guard < 10000 && status == DeltaCodec::OP_OK; guard++) {
+            status = codec.step();
+        }
+        EXPECT_EQ(status, DeltaCodec::READ_ERROR);
+    }
+}
+
+bool DeltaRulesTester::Static__PatchReadFailsMidChunk__precondition() const {
+    return true;
+}
+
+void DeltaRulesTester::Static__PatchReadFailsMidChunk__action() {
+    // The patch medium stops reading once chunks are being decoded
+    DeltaCoder& coder = this->m_coder;
+    MemoryMedia oldMedia(TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+    MemoryMedia patchMedia(this->goldenPatch(), this->goldenPatchSize());
+    MemoryMedia newMedia;
+    TestCodec codec(coder);
+    ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+    U32 guard = 0;
+    for (; guard < 10000 && codec.state() != TestCodec::PATCHING; guard++) {
+        codec.step();
+    }
+    ASSERT_EQ(codec.state(), TestCodec::PATCHING);
+    patchMedia.failReads = true;
+    U32 steps = 0;
+    const DeltaCodec::Status status = run(codec, steps);
+    EXPECT_TRUE(status == DeltaCodec::READ_ERROR || status == DeltaCodec::TRUNCATED) << status;
+    EXPECT_EQ(codec.state(), TestCodec::FAILED);
+}
+
+bool DeltaRulesTester::Static__RejectsShortChunk__precondition() const {
+    return true;
+}
+
+void DeltaRulesTester::Static__RejectsShortChunk__action() {
+    // An operation stream that ends before the chunk's output is complete
+    const std::vector<U8> oldImage(16, 0x11);
+    const std::vector<U8> newImage(16, 0x22);
+    std::vector<U8> ops = {TestEncoders::OP_LIT, 5, 0x22, 0x22, 0x22, 0x22, 0x22};
+    TestCodec::State state;
+    // The stream runs dry mid-chunk: rejected as a truncated chunk (or a bad op
+    // stream when the coder still holds pending state), never committed
+    const DeltaCodec::Status status =
+        applyPatch(this->m_coder, buildOpPatch(this->m_coder.id(), oldImage, newImage, 16, {ops}), oldImage, state);
+    EXPECT_TRUE(status == DeltaCodec::TRUNCATED || status == DeltaCodec::BAD_OPCODE) << status;
+    EXPECT_EQ(state, TestCodec::FAILED);
+}
+
+bool DeltaRulesTester::Static__RejectsMalformedVarint__precondition() const {
+    return true;
+}
+
+void DeltaRulesTester::Static__RejectsMalformedVarint__action() {
+    // An operand varint that never terminates
+    const std::vector<U8> oldImage(16, 0x11);
+    const std::vector<U8> newImage(16, 0x22);
+    std::vector<U8> ops = {TestEncoders::OP_LIT};
+    for (U32 i = 0; i < 12; i++) {
+        ops.push_back(0x80);
+    }
+    TestCodec::State state;
+    EXPECT_EQ(
+        applyPatch(this->m_coder, buildOpPatch(this->m_coder.id(), oldImage, newImage, 16, {ops}), oldImage, state),
+        DeltaCodec::BAD_OPCODE);
+    EXPECT_EQ(state, TestCodec::FAILED);
+}
+
 }  // namespace Update

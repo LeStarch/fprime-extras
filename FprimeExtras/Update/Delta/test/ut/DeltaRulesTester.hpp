@@ -106,6 +106,11 @@ class DeltaRulesTester {
     FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, FailedChunkNeverCommitsOutput);
     FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, IoBudgetSpansSteps);
     FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, ClassifiesShrunkMedia);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsWrongImageCrc);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, MediaSizeFaults);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, PatchReadFailsMidChunk);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsShortChunk);
+    FW_RBT_DEFINE_RULE(DeltaRulesTester, Static, RejectsMalformedVarint);
 
     //! Golden vectors for the coder under test (DeltaTestVectors.hpp)
     const U8* goldenPatch() const;

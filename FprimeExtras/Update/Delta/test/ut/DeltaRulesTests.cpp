@@ -81,6 +81,11 @@ static void staticScenario(DeltaCoder& coder) {
     DeltaRulesTester::Static__FailedChunkNeverCommitsOutput failedChunkNeverCommitsOutput;
     DeltaRulesTester::Static__IoBudgetSpansSteps ioBudgetSpansSteps;
     DeltaRulesTester::Static__ClassifiesShrunkMedia classifiesShrunkMedia;
+    DeltaRulesTester::Static__RejectsWrongImageCrc rejectsWrongImageCrc;
+    DeltaRulesTester::Static__MediaSizeFaults mediaSizeFaults;
+    DeltaRulesTester::Static__PatchReadFailsMidChunk patchReadFailsMidChunk;
+    DeltaRulesTester::Static__RejectsShortChunk rejectsShortChunk;
+    DeltaRulesTester::Static__RejectsMalformedVarint rejectsMalformedVarint;
     STest::Rule<DeltaRulesTester>* rules[] = {
         &coderGolden,
         &lzssHandCrafted,
@@ -107,6 +112,11 @@ static void staticScenario(DeltaCoder& coder) {
         &failedChunkNeverCommitsOutput,
         &ioBudgetSpansSteps,
         &classifiesShrunkMedia,
+        &rejectsWrongImageCrc,
+        &mediaSizeFaults,
+        &patchReadFailsMidChunk,
+        &rejectsShortChunk,
+        &rejectsMalformedVarint,
     };
     U32 applied = 0;
     for (FwSizeType i = 0; i < FW_NUM_ARRAY_ELEMENTS(rules); i++) {

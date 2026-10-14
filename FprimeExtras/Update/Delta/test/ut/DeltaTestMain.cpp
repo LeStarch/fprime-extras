@@ -7,7 +7,9 @@
 // ======================================================================
 #include <gtest/gtest.h>
 
+#include <unistd.h>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "FprimeExtras/Update/Delta/DeltaCodec.hpp"
@@ -196,4 +198,31 @@ TEST(DeltaFileMedia, ApplyThroughFiles) {
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+TEST(DeltaFileMedia, NotOpenAndBadPaths) {
+    DeltaFileMedia media;
+    FwSizeType size = 0;
+    U8 byte = 0;
+    EXPECT_EQ(media.size(size), DeltaMedia::NOT_OPEN);
+    EXPECT_EQ(media.read(0, &byte, 1), DeltaMedia::NOT_OPEN);
+    EXPECT_EQ(media.write(0, &byte, 1), DeltaMedia::NOT_OPEN);
+    EXPECT_EQ(media.flush(), DeltaMedia::OP_OK);  // nothing open, nothing to commit
+    EXPECT_NE(media.open("/nonexistent/dir/spatch-ut.bin", DeltaFileMedia::READ_ONLY), Os::File::OP_OK);
+    EXPECT_NE(media.open("/tmp", DeltaFileMedia::READ_WRITE), Os::File::OP_OK);
+    // Read-only media refuse writes
+    char path[] = "/tmp/spatch-ro-XXXXXX";
+    const int fd = mkstemp(path);
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(::write(fd, "abc", 3), 3);
+    ::close(fd);
+    ASSERT_EQ(media.open(path, DeltaFileMedia::READ_ONLY), Os::File::OP_OK);
+    EXPECT_EQ(media.write(0, &byte, 1), DeltaMedia::NOT_OPEN);
+    EXPECT_EQ(media.size(size), DeltaMedia::OP_OK);
+    EXPECT_EQ(size, 3u);
+    EXPECT_EQ(media.read(2, &byte, 1), DeltaMedia::OP_OK);
+    EXPECT_EQ(byte, static_cast<U8>('c'));
+    EXPECT_NE(media.read(3, &byte, 1), DeltaMedia::OP_OK);
+    media.close();
+    ::unlink(path);
 }
