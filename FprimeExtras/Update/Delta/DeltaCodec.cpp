@@ -431,8 +431,14 @@ DeltaCodec::Status DeltaCodec::finishImage(StepResult& result) {
     }
     // Read back through a freshly resolved handle so an output path replaced or
     // removed beneath the open handle (an orphaned inode would still read back
-    // bit-exact) is reported as a mismatch rather than attested
-    if (this->m_new->refresh() != DeltaMedia::OP_OK) {
+    // bit-exact) is reported as a mismatch rather than attested. A medium the
+    // commit has already closed (a refused flush on a re-entered stage) is the
+    // same write failure again, not a mismatch
+    const DeltaMedia::Status refreshed = this->m_new->refresh();
+    if (refreshed == DeltaMedia::NOT_OPEN) {
+        return WRITE_ERROR;
+    }
+    if (refreshed != DeltaMedia::OP_OK) {
         return NEW_IMAGE_MISMATCH;
     }
     this->m_verify.offset = 0;

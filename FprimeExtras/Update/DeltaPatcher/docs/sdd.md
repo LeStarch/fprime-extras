@@ -143,7 +143,8 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   failure; `DeltaFileMedia::flush()` — also run at every chunk commit — re-checks that `new_file` still names a regular
   file before re-opening its read handle, so a FIFO or device swapped in mid-patch fails the chunk and closes the medium — a re-entered chunk then fails `NOT_OPEN` rather than writing the orphaned inode — instead of blocking
   the rate-group thread in `open()`), then `DeltaMedia::refresh()` — `DeltaFileMedia` re-resolves `new_file` by path (closing the handle and
-  re-opening it, `NEW_IMAGE_MISMATCH` if the path no longer names a regular file) so `PatchComplete` attests to the file
+  re-opening it, `NEW_IMAGE_MISMATCH` if the path no longer names a regular file, `WRITE_ERROR` if a refused commit
+  already closed the medium) so `PatchComplete` attests to the file
   the operator will find at `new_file`, not to an orphaned inode that was replaced during patching — and enters
   `VERIFY_FINAL`, re-reading the stored image in `DELTA_VERIFY_BYTES_PER_STEP` slices and
   comparing size and CRC to the header (`NEW_IMAGE_MISMATCH` otherwise). `PatchComplete` therefore attests to the bytes

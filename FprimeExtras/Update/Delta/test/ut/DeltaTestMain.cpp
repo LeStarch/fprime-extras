@@ -166,6 +166,63 @@ TEST(DeltaFileMedia, ApplyThroughFiles) {
     Os::FileSystem::removeFile(newPath);
 }
 
+// Once the commit has refused a swapped output path (and closed the medium), a
+// re-entered stage -- the fail signal dropped by a full queue -- must report the
+// same WRITE_ERROR, whether the refusal hit a chunk commit or the final flush
+TEST(DeltaFileMedia, SwappedPathReentryIsWriteError) {
+    for (int finalFlush = 0; finalFlush < 2; finalFlush++) {
+        char dir[] = "/tmp/spatch-reentry-XXXXXX";
+        ASSERT_NE(mkdtemp(dir), nullptr);
+        const std::string oldPath = std::string(dir) + "/old.bin";
+        const std::string patchPath = std::string(dir) + "/patch.spatch";
+        const std::string newPath = std::string(dir) + "/new.bin";
+        writeFile(oldPath.c_str(), TestVectors::OLD_IMAGE, TestVectors::OLD_IMAGE_SIZE);
+        writeFile(patchPath.c_str(), TestVectors::PATCH_NONE, TestVectors::PATCH_NONE_SIZE);
+        DeltaFileMedia oldMedia;
+        DeltaFileMedia patchMedia;
+        DeltaFileMedia newMedia;
+        ASSERT_EQ(oldMedia.open(oldPath.c_str(), DeltaFileMedia::READ_ONLY), Os::File::OP_OK);
+        ASSERT_EQ(patchMedia.open(patchPath.c_str(), DeltaFileMedia::READ_ONLY), Os::File::OP_OK);
+        ASSERT_EQ(newMedia.open(newPath.c_str(), DeltaFileMedia::CREATE), Os::File::OP_OK);
+
+        DeltaCoderNone coder;
+        TestCodec codec(coder);
+        ASSERT_EQ(codec.begin(oldMedia, patchMedia, newMedia), DeltaCodec::OP_OK);
+        for (U32 step = 0; step < 1000 && codec.state() != TestCodec::PATCHING; step++) {
+            ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
+        }
+        ASSERT_EQ(codec.state(), TestCodec::PATCHING);
+        if (finalFlush == 1) {
+            // Commit every chunk; the next step is the final flush and read-back
+            for (U32 step = 0; step < 100000 && codec.chunkIndex() < codec.chunkCount(); step++) {
+                ASSERT_EQ(codec.step(), DeltaCodec::OP_OK);
+            }
+            ASSERT_EQ(codec.chunkIndex(), codec.chunkCount());
+            ASSERT_EQ(codec.state(), TestCodec::PATCHING);
+        }
+        ASSERT_EQ(::unlink(newPath.c_str()), 0);
+        ASSERT_EQ(::mkfifo(newPath.c_str(), 0600), 0);
+
+        DeltaCodec::Status status = DeltaCodec::OP_OK;
+        for (U32 step = 0; step < 100000 && status == DeltaCodec::OP_OK; step++) {
+            status = codec.step();
+        }
+        EXPECT_EQ(status, DeltaCodec::WRITE_ERROR) << "finalFlush=" << finalFlush;
+        EXPECT_EQ(codec.state(), TestCodec::FAILED);
+        EXPECT_FALSE(newMedia.isOpen());
+        DeltaCodec::StepResult result = DeltaCodec::IN_PROGRESS;
+        EXPECT_EQ(codec.codec.patchChunk(result), DeltaCodec::WRITE_ERROR) << "finalFlush=" << finalFlush;
+        EXPECT_EQ(codec.codec.patchChunk(result), DeltaCodec::WRITE_ERROR) << "finalFlush=" << finalFlush;
+
+        oldMedia.close();
+        patchMedia.close();
+        ::unlink(oldPath.c_str());
+        ::unlink(patchPath.c_str());
+        ::unlink(newPath.c_str());
+        ::rmdir(dir);
+    }
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
