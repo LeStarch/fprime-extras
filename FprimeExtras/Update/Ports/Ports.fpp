@@ -25,7 +25,7 @@ module Update {
         CHUNK_CRC,          @< Chunk output CRC failed
         BAD_OPCODE,         @< Unknown/invalid op, operand out of bounds, or malformed coder payload
         READ_ERROR,         @< Media read failed
-        WRITE_ERROR,        @< Media write failed
+        WRITE_ERROR,        @< Media write or commit failed (includes an output path that stopped naming a regular file)
         NEW_IMAGE_MISMATCH, @< Final new image CRC (or stored size/CRC on read-back) differs from header
         PATCH_SIZE_MISMATCH, @< Patch file has trailing bytes after the final chunk
         OUTPUT_STALE,       @< Existing new file is larger than the header's new size

@@ -1,8 +1,9 @@
 // ======================================================================
 // \title  DeltaTestMain.cpp
 // \author starchmd
-// \brief  Unit tests for DeltaWindow, the shipped DeltaCoders, DeltaFileMedia,
-// and the DeltaCodec engine
+// \brief  Unit tests for DeltaWindow, DeltaFileMedia and the DeltaCodec memory
+// footprint; coder and codec behaviour is covered by the rules suites
+// (DeltaRulesTests.cpp)
 // \copyright Copyright (c) 2026 Michael Starch
 // ======================================================================
 #include <gtest/gtest.h>
@@ -213,6 +214,10 @@ TEST(DeltaFileMedia, FlushRejectsPathSwappedForFifo) {
     EXPECT_EQ(media.flush(), DeltaMedia::IO_ERROR);                      // but the commit refuses the swapped path
     EXPECT_FALSE(media.isOpen());
     EXPECT_EQ(media.refresh(), DeltaMedia::NOT_OPEN);
+    EXPECT_EQ(media.write(8, bytes, sizeof(bytes)), DeltaMedia::NOT_OPEN);  // a re-entered chunk cannot reach the inode
+    EXPECT_EQ(media.flush(), DeltaMedia::OP_OK);                            // nothing left open to commit
+    FwSizeType size = 0;
+    EXPECT_EQ(media.size(size), DeltaMedia::NOT_OPEN);
     media.close();
     ::unlink(path.c_str());
     ::rmdir(dir);
