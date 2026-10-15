@@ -130,9 +130,15 @@ DeltaMedia::Status DeltaFileMedia::flush() {
     if (this->m_writer.flush() != Os::File::OP_OK) {
         return IO_ERROR;
     }
-    // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it
+    // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it.
+    // The path is re-checked first: a FIFO or device swapped in under the open handle would block the open on the
+    // calling (rate-group) thread, so anything but a regular file fails the chunk instead
     if (this->m_readable) {
         this->m_reader.close();
+        this->m_readable = false;
+        if (!DeltaFileMedia::isRegularFile(this->m_path.toChar())) {
+            return IO_ERROR;
+        }
         this->m_readable = (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ,
                                                 Os::File::OverwriteType::NO_OVERWRITE) == Os::File::OP_OK);
         if (!this->m_readable) {

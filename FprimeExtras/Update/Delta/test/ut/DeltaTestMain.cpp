@@ -7,9 +7,11 @@
 // ======================================================================
 #include <gtest/gtest.h>
 
+#include <sys/stat.h>
 #include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 #include "FprimeExtras/Update/Delta/DeltaCodec.hpp"
@@ -193,4 +195,25 @@ TEST(DeltaFileMedia, NotOpenAndBadPaths) {
     EXPECT_NE(media.read(3, &byte, 1), DeltaMedia::OP_OK);
     media.close();
     ::unlink(path);
+}
+
+// A FIFO swapped in for the output path mid-patch must fail the commit, not block the (rate-group) thread in open()
+TEST(DeltaFileMedia, FlushRejectsPathSwappedForFifo) {
+    char dir[] = "/tmp/spatch-fifo-XXXXXX";
+    ASSERT_NE(mkdtemp(dir), nullptr);
+    std::string path = std::string(dir) + "/out.bin";
+    DeltaFileMedia media;
+    ASSERT_EQ(media.open(path.c_str(), DeltaFileMedia::CREATE), Os::File::OP_OK);
+    const U8 bytes[4] = {1, 2, 3, 4};
+    ASSERT_EQ(media.write(0, bytes, sizeof(bytes)), DeltaMedia::OP_OK);
+    ASSERT_EQ(media.flush(), DeltaMedia::OP_OK);
+    ASSERT_EQ(::unlink(path.c_str()), 0);
+    ASSERT_EQ(::mkfifo(path.c_str(), 0600), 0);
+    EXPECT_EQ(media.write(4, bytes, sizeof(bytes)), DeltaMedia::OP_OK);  // the orphaned inode still accepts writes
+    EXPECT_EQ(media.flush(), DeltaMedia::IO_ERROR);                      // but the commit refuses the swapped path
+    EXPECT_FALSE(media.isOpen());
+    EXPECT_EQ(media.refresh(), DeltaMedia::NOT_OPEN);
+    media.close();
+    ::unlink(path.c_str());
+    ::rmdir(dir);
 }

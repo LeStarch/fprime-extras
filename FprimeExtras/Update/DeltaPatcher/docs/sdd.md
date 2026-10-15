@@ -140,7 +140,9 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   Skipped chunks are trusted on CRC alone (they are not re-decoded); CRC32 detects accidental corruption, not a
   deliberate forgery — see *Integrity*.
 * **Read-back.** After the last chunk the codec calls `DeltaMedia::flush()` on the new image (`WRITE_ERROR` on
-  failure), then `DeltaMedia::refresh()` — `DeltaFileMedia` re-resolves `new_file` by path (closing the handle and
+  failure; `DeltaFileMedia::flush()` — also run at every chunk commit — re-checks that `new_file` still names a regular
+  file before re-opening its read handle, so a FIFO or device swapped in mid-patch fails the chunk rather than blocking
+  the rate-group thread in `open()`), then `DeltaMedia::refresh()` — `DeltaFileMedia` re-resolves `new_file` by path (closing the handle and
   re-opening it, `NEW_IMAGE_MISMATCH` if the path no longer names a regular file) so `PatchComplete` attests to the file
   the operator will find at `new_file`, not to an orphaned inode that was replaced during patching — and enters
   `VERIFY_FINAL`, re-reading the stored image in `DELTA_VERIFY_BYTES_PER_STEP` slices and
