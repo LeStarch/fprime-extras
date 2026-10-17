@@ -13,9 +13,15 @@ module Update {
         stack size StackSizes.updater \
         priority Priorities.updater
 
+    @ Queued (no thread): the deployment connects a rate group to deltaPatcher.run. deltaPatcher.patchComplete is
+    @ left open; operators install the produced image with updater.UPDATE_IMAGE_FROM.
+    instance deltaPatcher: Update.DeltaPatcher base id BASE_ID + 0x2000 \
+        queue size QueueSizes.deltaPatcher
+
     topology Subtopology {
         instance updater
         instance worker
+        instance deltaPatcher
 
         connections Update {
             updater.prepareImage -> worker.prepareImage

@@ -4,6 +4,7 @@ register_fprime_config(
         "${CMAKE_CURRENT_SOURCE_DIR}/BufferRepeaterConfig.fpp"
     HEADERS
         "${CMAKE_CURRENT_SOURCE_DIR}/DropDetectorConfig.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/DeltaCodecConfig.hpp"
     BASE_CONFIG
     DEPENDS
         "${FPRIME_GLOBAL_INTERFACE_TARGET}"

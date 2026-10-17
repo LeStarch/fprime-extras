@@ -1,5 +1,7 @@
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/UpdateStatus/")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Ports/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Delta/")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/DeltaPatcher/")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/StubWorker/")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Updater/")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Subtopology/")

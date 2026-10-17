@@ -14,6 +14,37 @@ module Update {
         PERMANENT @< Set the image as the permanent software image
     }
 
+    @ Outcome of a delta-patch operation or step
+    enum DeltaPatchStatus : U8 {
+        OP_OK,              @< Success
+        BUSY,               @< Another patch is in progress
+        OPEN_FAILED,        @< Could not open old/patch/new file
+        BAD_HEADER,         @< Magic/version/flags/CRC/geometry invalid in SPatch header
+        OLD_IMAGE_MISMATCH, @< Old image size or CRC differs from header
+        TRUNCATED,          @< Patch ended before the declared output was produced
+        CHUNK_CRC,          @< Chunk output CRC failed
+        BAD_OPCODE,         @< Unknown/invalid op, operand out of bounds, or malformed coder payload
+        READ_ERROR,         @< Media read failed
+        WRITE_ERROR,        @< Media write or commit failed (includes an output path that stopped naming a regular file)
+        NEW_IMAGE_MISMATCH, @< Final new image CRC (or stored size/CRC on read-back) differs from header
+        PATCH_SIZE_MISMATCH, @< Patch file has trailing bytes after the final chunk
+        OUTPUT_STALE,       @< Existing new file is larger than the header's new size
+        ABORTED,            @< Operator abort
+        SAME_FILE,          @< old_file, patch_file and new_file must be distinct
+        CODER_MISMATCH,     @< Valid header names a coder other than the one installed in flight
+        SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
+    }
+
+    @ State of the DeltaPatcher (mirrors the Update.DeltaPatchMachine states). Wire values 2 and 3 were
+    @ FAILED/COMPLETE before the verify states existed: dictionaries from that encoding are not compatible.
+    enum DeltaPatchState : U8 {
+        IDLE,           @< No patch bound; the outcome of the last patch is in LastStatus
+        PATCHING,       @< Applying chunks
+        VERIFY_RESUME,  @< Resume: CRC-checking chunks already present in the new image
+        VERIFY_OLD,     @< CRC-checking the old image against the header
+        VERIFY_FINAL    @< Reading the flushed new image back and checking its CRC
+    }
+
     @ Port used to report a status back from a given update action
     port UpdateResponse(
         status: UpdateStatus @< Status to supplied to action
