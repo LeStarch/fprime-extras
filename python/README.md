@@ -23,8 +23,9 @@ its width, or `--size-width 4|8` (default 8); a mismatch is rejected on board wi
 See `FprimeExtras/Update/DeltaPatcher/docs/sdd.md` for the SPatch v2 container, operation and coder formats. The
 C++ decoder in `FprimeExtras/Update/Delta/` is the flight implementation; `spatch.py`/`coders.py` are the
 reference implementation; `FprimeExtras/Update/Delta/test/ut/generate_vectors.py` (run after `pip install ./python`,
-with the `bsdiff4` version it records) emits ground-produced vectors that `DeltaTestMain.cpp` checks the flight
-decoder against.
+with the `bsdiff4` version it records) emits ground-produced vectors that the static rules in
+`FprimeExtras/Update/Delta/test/ut/Rules/StaticRules.cpp` (`Static.CoderGolden`, `Static.ApplyGolden`, run per
+coder) check the flight decoder against.
 
 ## Matchers and licensing
 

@@ -57,8 +57,11 @@ class DeltaMedia {
 //!
 //! open() requires the path to name a regular file (or, for READ_WRITE/CREATE,
 //! nothing yet): directories, FIFOs, devices and symbolic links are refused
-//! with INVALID_ARGUMENT before any blocking open() is attempted. Writes are
-//! issued without a per-write sync; flush() commits them.
+//! with INVALID_ARGUMENT before any blocking open() is attempted. The same
+//! check guards every later reopen of the reader (flush(), refresh()); a path
+//! that has stopped naming a regular file fails with IO_ERROR and flush()
+//! closes the medium. Writes are issued without a per-write sync; flush()
+//! commits them.
 class DeltaFileMedia final : public DeltaMedia {
   public:
     enum Access {
@@ -90,6 +93,9 @@ class DeltaFileMedia final : public DeltaMedia {
     static bool isRegularFile(const char* path);
 
   private:
+    //! Close and reopen the reader on the current path; false (reader closed) unless it still names a regular file
+    bool reopenReader();
+
     Os::File m_reader;
     Os::File m_writer;
     Fw::FileNameString m_path;

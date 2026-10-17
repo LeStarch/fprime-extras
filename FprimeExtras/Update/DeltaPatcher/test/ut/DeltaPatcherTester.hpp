@@ -10,8 +10,10 @@
 
 #include <string>
 
+#include "FprimeExtras/Update/Delta/test/ut/DeltaTestEncoders.hpp"
 #include "FprimeExtras/Update/DeltaPatcher/DeltaPatcher.hpp"
 #include "FprimeExtras/Update/DeltaPatcher/DeltaPatcherGTestBase.hpp"
+#include "TestUtils/RuleBasedTesting.hpp"
 
 namespace Update {
 
@@ -22,7 +24,7 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     // ----------------------------------------------------------------------
 
     // Maximum size of histories storing events, telemetry, and port outputs
-    static const FwSizeType MAX_HISTORY_SIZE = 200;
+    static const FwSizeType MAX_HISTORY_SIZE = 20000;  //!< Rules tick thousands of times per patch
 
     // Instance ID supplied to the component instance under test
     static const FwEnumStoreType TEST_INSTANCE_ID = 0;
@@ -38,11 +40,45 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     // Construction and destruction
     // ----------------------------------------------------------------------
 
-    //! Construct object DeltaPatcherTester
-    DeltaPatcherTester();
-
-    //! Destroy object DeltaPatcherTester
+    //! `coder` (when given) replaces the component's shipped coder before any patch; rules build their
+    //! patches for whichever coder is in use
+    explicit DeltaPatcherTester(DeltaCoder* coder = nullptr);
     ~DeltaPatcherTester();
+
+    // ----------------------------------------------------------------------
+    // Rules (Rules/PatcherRules.cpp): a random walk over commands, ticks,
+    // aborts, damaged files and a flooded queue, with the component's events,
+    // telemetry and command responses as the oracle
+    // ----------------------------------------------------------------------
+
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, Apply);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, Tick);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, ApplyWhileBusy);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, Abort);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, AbortIdle);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, CorruptPatch);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, CorruptOutput);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, OldMismatch);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, MissingInput);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, SameFile);
+    FW_RBT_DEFINE_RULE(DeltaPatcherTester, Patcher, QueueFlood);
+
+    //! Counts of what the random walk exercised
+    struct RuleCounters {
+        U32 applies;
+        U32 resumes;
+        U32 completions;
+        U32 aborts;
+        U32 abortsOvertaken;
+        U32 rejections;
+        U32 chunkFailures;
+        U32 oldMismatches;
+        U32 outputCorruptions;
+        U32 floods;
+        U32 ticks;
+    };
+    const RuleCounters& ruleCounters() const { return this->m_rc; }
+    void printRuleCounters() const;
 
   public:
     // ----------------------------------------------------------------------
@@ -79,6 +115,21 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! ABORT_PATCH when idle is a validation error
     void abortIdle();
 
+    //! Abort while in VERIFY_OLD and VERIFY_FINAL
+    void abortDuringVerify();
+
+    //! Queue held full of ABORT_PATCH while bound: hook absorbs dropped signals
+    void signalOverflow();
+
+    //! start signal dropped by a full queue: hook unbinds and answers BUSY
+    void startDropped();
+
+    //! Overflow hook answers a dropped abort directly
+    void hookAnswersDroppedAbort();
+
+    //! Abort dispatched with the completing tick: answered from IDLE as ignored
+    void abortOvertakenByCompletion();
+
     //! Queue-full commands are answered BUSY immediately via the overflow hook
     void queueOverflow();
 
@@ -97,7 +148,7 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! A rejected header does not leave an empty new_file behind
     void badHeaderLeavesNoOutput();
 
-    //! new_file replaced by another file before read-back is reported NEW_IMAGE_MISMATCH, not COMPLETE
+    //! new_file replaced by another file before read-back is reported NEW_IMAGE_MISMATCH, not PatchComplete
     void outputReplacedBeforeVerify();
 
   private:
@@ -126,6 +177,22 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     //! Tick `run` until a command response is recorded or MAX_TICKS elapse; returns ticks used
     U32 runUntilResponse();
 
+    // Rule helpers
+    //! Build a fresh random patch for the coder in use and write old + patch files; drops the output file
+    void newRandomPatch();
+    //! Whole chunks at the head of the existing output that match the intended image (resume oracle)
+    FwSizeType expectedResumedChunks() const;
+    //! Size of the output file, 0 when absent
+    FwSizeType outputSize() const;
+    //! The output file equals the intended image
+    bool outputMatches() const;
+    //! Write a byte vector to a file
+    static void writeFile(const std::string& path, const std::vector<U8>& data);
+    //! Tick until `responses` command responses are recorded or MAX_TICKS elapse
+    U32 runUntilResponses(FwSizeType responses);
+    //! Common checks once a patch has ended (any outcome): State IDLE, nothing bound, no false completion
+    void checkEnded();
+
   private:
     // ----------------------------------------------------------------------
     // Member variables
@@ -138,6 +205,19 @@ class DeltaPatcherTester final : public DeltaPatcherGTestBase {
     std::string m_old;    //!< Old image path
     std::string m_patch;  //!< Patch path
     std::string m_new;    //!< New image path
+
+    // Rule shadow state
+    U8 m_coderId;                     //!< Coder the component decodes with
+    TestEncoders::RandomPatch m_rp;   //!< Current random patch and the image it must produce
+    bool m_haveFiles;                 //!< old + patch files describe m_rp
+    bool m_busy;                      //!< An APPLY_PATCH is in progress
+    U32 m_applySeq;                   //!< Sequence of the in-progress APPLY_PATCH
+    U32 m_nextSeq;                    //!< Next command sequence number
+    FwSizeType m_expectResumed;       //!< Resume oracle for the in-progress patch
+    FwSizeType m_resumedEvents;       //!< PatchResumed events seen so far for the in-progress patch
+    std::vector<U8> m_outputAtApply;  //!< Output content when the in-progress patch was applied (diagnostics)
+    std::string m_history;            //!< Rules applied since the current patch was built (diagnostics)
+    RuleCounters m_rc;
 };
 
 }  // namespace Update

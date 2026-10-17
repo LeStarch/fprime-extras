@@ -130,14 +130,12 @@ DeltaMedia::Status DeltaFileMedia::flush() {
     if (this->m_writer.flush() != Os::File::OP_OK) {
         return IO_ERROR;
     }
-    // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it
-    if (this->m_readable) {
-        this->m_reader.close();
-        this->m_readable = (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ,
-                                                Os::File::OverwriteType::NO_OVERWRITE) == Os::File::OP_OK);
-        if (!this->m_readable) {
-            return IO_ERROR;
-        }
+    // The reader's view of the file size may predate the writes (FatFs caches it per handle); reopen to refresh it.
+    // A refused reopen closes the medium entirely: the orphaned write handle must not accept a re-entered chunk
+    // after the path has been lost
+    if (this->m_readable && !this->reopenReader()) {
+        this->close();
+        return IO_ERROR;
     }
     return OP_OK;
 }
@@ -146,14 +144,20 @@ DeltaMedia::Status DeltaFileMedia::refresh() {
     if (!this->m_readable) {
         return NOT_OPEN;
     }
+    return this->reopenReader() ? OP_OK : IO_ERROR;
+}
+
+bool DeltaFileMedia::reopenReader() {
+    // The path is re-checked before the open: a FIFO or device swapped in under the open handle would block the
+    // open on the calling (rate-group) thread, so anything but a regular file is refused instead
     this->m_reader.close();
     this->m_readable = false;
     if (!DeltaFileMedia::isRegularFile(this->m_path.toChar())) {
-        return IO_ERROR;
+        return false;
     }
     this->m_readable = (this->m_reader.open(this->m_path.toChar(), Os::File::OPEN_READ,
                                             Os::File::OverwriteType::NO_OVERWRITE) == Os::File::OP_OK);
-    return this->m_readable ? OP_OK : IO_ERROR;
+    return this->m_readable;
 }
 
 }  // namespace Update

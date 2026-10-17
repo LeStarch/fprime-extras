@@ -25,7 +25,7 @@ module Update {
         CHUNK_CRC,          @< Chunk output CRC failed
         BAD_OPCODE,         @< Unknown/invalid op, operand out of bounds, or malformed coder payload
         READ_ERROR,         @< Media read failed
-        WRITE_ERROR,        @< Media write failed
+        WRITE_ERROR,        @< Media write or commit failed (includes an output path that stopped naming a regular file)
         NEW_IMAGE_MISMATCH, @< Final new image CRC (or stored size/CRC on read-back) differs from header
         PATCH_SIZE_MISMATCH, @< Patch file has trailing bytes after the final chunk
         OUTPUT_STALE,       @< Existing new file is larger than the header's new size
@@ -35,12 +35,14 @@ module Update {
         SIZE_WIDTH_MISMATCH @< Header sizes were serialized with a different FwSizeType width than the flight build
     }
 
-    @ State of the DeltaPatcher
+    @ State of the DeltaPatcher (mirrors the Update.DeltaPatchMachine states). Wire values 2 and 3 were
+    @ FAILED/COMPLETE before the verify states existed: dictionaries from that encoding are not compatible.
     enum DeltaPatchState : U8 {
-        IDLE,
-        PATCHING,
-        FAILED,
-        COMPLETE
+        IDLE,           @< No patch bound; the outcome of the last patch is in LastStatus
+        PATCHING,       @< Applying chunks
+        VERIFY_RESUME,  @< Resume: CRC-checking chunks already present in the new image
+        VERIFY_OLD,     @< CRC-checking the old image against the header
+        VERIFY_FINAL    @< Reading the flushed new image back and checking its CRC
     }
 
     @ Port used to report a status back from a given update action

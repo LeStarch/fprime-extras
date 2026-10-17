@@ -11,12 +11,17 @@
 ####
 register_fprime_library(
     SOURCES
-        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoder.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderNone.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderRle.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderLzss.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaMedia.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCodec.cpp"
     HEADERS
         "${CMAKE_CURRENT_LIST_DIR}/DeltaWindow.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCoder.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderNone.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderRle.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/DeltaCoderLzss.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaMedia.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/DeltaCodec.hpp"
     DEPENDS
@@ -30,6 +35,12 @@ register_fprime_library(
 register_fprime_ut(
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaTestMain.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaRulesTester.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/DeltaRulesTests.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/CoderRules.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/CodecRules.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Rules/StaticRules.cpp"
     DEPENDS
         gtest
+        STest
 )

@@ -8,13 +8,15 @@
 #
 module Update {
     @ Applies an uplinked SPatch file to an on-board old image, producing a new image file suitable for
-    @ Updater.UPDATE_IMAGE_FROM. The component is queued: on each `run` invocation up to MAX_DISPATCH_PER_TICK queued
-    @ commands are dispatched, then one bounded step of patch work is performed: either CRC verification of up to
-    @ DELTA_VERIFY_BYTES_PER_STEP bytes, or chunk work issuing at most DELTA_MAX_IO_PER_STEP media reads/writes. Each
-    @ step performs blocking Os::File I/O on the rate-group thread, so `run` should be driven from a slow, non-critical
-    @ rate group. `run` is mandatory and must be connected to exactly one rate group: it is the only place queued
-    @ commands are dispatched, so an unconnected `run` leaves APPLY_PATCH unanswered, and a second driver would
-    @ interleave patch steps (the port is guarded, so concurrent calls serialize rather than corrupt state).
+    @ Updater.UPDATE_IMAGE_FROM. The component is queued and its lifecycle is the DeltaPatchMachine state machine:
+    @ on each `run` invocation the queue is drained (bounded), a `tick` signal is sent, and the queue is drained again
+    @ so the tick's action — one bounded unit of work delegated to the DeltaCodec: CRC verification of up to
+    @ DELTA_VERIFY_BYTES_PER_STEP bytes, or chunk work issuing at most DELTA_MAX_IO_PER_STEP media reads/writes —
+    @ and the stage transition it produces complete within the same tick. Each unit of work performs blocking
+    @ Os::File I/O on the rate-group thread, so `run` should be driven from a slow, non-critical rate group. `run`
+    @ is mandatory and must be connected to exactly one rate group: it is the only place queued commands are
+    @ dispatched, so an unconnected `run` leaves APPLY_PATCH unanswered, and a second driver would interleave patch
+    @ steps (the port is guarded, so concurrent calls serialize rather than corrupt state).
     @
     @ The old image is never modified: old_file, patch_file and new_file must name distinct regular files (new_file may
     @ also be absent); directories, links and special files are rejected. Command path arguments are limited to
@@ -23,8 +25,11 @@ module Update {
     @ first unverified chunk. RAM usage is fixed at construction and the engine never allocates.
     queued component DeltaPatcher {
 
-        @ Rate-group tick: dispatches queued commands, then performs one bounded step of patch work. Mandatory;
-        @ connect exactly one rate group.
+        @ Lifecycle of the patch in progress; its actions delegate the work to the DeltaCodec
+        state machine instance deltaPatchMachine: DeltaPatchMachine hook
+
+        @ Rate-group tick: dispatches queued commands and state-machine signals, then performs one bounded unit of
+        @ patch work through the state machine. Mandatory; connect exactly one rate group.
         guarded input port run: Svc.Sched
 
         @ Emitted on successful completion with (new_file, new_crc32). Left unconnected by default: operators install
@@ -65,7 +70,7 @@ module Update {
         @ The on-board old image does not match the patch header
         event OldImageMismatch(
             expected_crc: U32 @< CRC declared by the patch
-            actual_crc: U32 @< CRC of the on-board old image
+            actual_crc: U32 @< CRC of the on-board old image (of the bytes read when it could not be read to expected_size)
             expected_size: FwSizeType @< Size declared by the patch
             actual_size: FwSizeType @< Size of the on-board old image
         ) severity warning high format "Old image mismatch: crc {x} != {x}, size {} != {}"
@@ -89,11 +94,19 @@ module Update {
         ) severity activity high format "Patch aborted at chunk {}"
 
         @ ABORT_PATCH was received while no patch was in progress
-        event AbortIgnored(
-            current: DeltaPatchState @< Current patcher state
-        ) severity warning low format "ABORT_PATCH ignored: patcher state is {}"
+        event AbortIgnored() severity warning low format "ABORT_PATCH ignored: no patch in progress"
 
-        @ Current patcher state
+        @ The patch lifecycle entered a state; the State channel carries the same value
+        event StateEntered(
+            entered: DeltaPatchState @< State entered
+        ) severity activity low format "Patcher entered {}"
+
+        @ A state-machine signal found the component queue full of commands and was dropped
+        event SignalDropped(
+            signalId: U32 @< DeltaPatchMachine signal id
+        ) severity warning high format "State machine signal {} dropped: queue full"
+
+        @ Current patcher state (DeltaPatchMachine state; IDLE between patches)
         telemetry State: DeltaPatchState update on change
 
         @ Chunks applied or verified so far
