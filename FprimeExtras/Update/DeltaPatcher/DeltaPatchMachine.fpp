@@ -52,7 +52,9 @@ module Update {
         action doVerifyFinal
 
         @ Announce entry into IDLE (StateEntered event + State channel). FPP entry actions take no argument and run
-        @ before the state is recorded, so each state names its own; all five delegate to DeltaPatcher::reportState()
+        @ before the state is recorded, so each state names its own; all five delegate to DeltaPatcher::reportState().
+        @ The initial transition is the exception: it runs inside init(), before ports and telemetry are set up,
+        @ so enterIdle stays silent for it (IDLE is the State channel default)
         action enterIdle
 
         @ Announce entry into VERIFY_RESUME

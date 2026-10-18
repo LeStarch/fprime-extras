@@ -54,7 +54,11 @@ under 1 KB of fixed state. The reconstructed image is then installed with the ex
   the last patch lives in `LastStatus` and the terminal event (`PatchComplete`, `OldImageMismatch`/`ChunkFailed`,
   `PatchAborted`), not in a state. Every state announces its entry through one C++ helper, `reportState()`, which
   emits `StateEntered(entered)` and writes the `State` channel; FPP entry actions cannot carry an argument and run
-  before the state is recorded, so each state declares a one-line `enter*` action naming itself.
+  before the state is recorded, so each state declares a one-line `enter*` action naming itself. The one silent
+  entry is the initial transition into IDLE: it executes inside the component's `init()`, before the topology is
+  connected and before `Svc.TlmPacketizer` has its packet list, so `enterIdle` emits nothing for it (writing the
+  `State` channel there asserts in the packetizer); IDLE is the channel's default value, and every later IDLE
+  entry is announced.
 
   Each working state handles `tick` with one delegate action (`doVerifyResume`, `doVerifyOld`, `doPatchChunk`,
   `doVerifyFinal`) that calls the matching `DeltaCodec` stage function once and translates its `Status` /
