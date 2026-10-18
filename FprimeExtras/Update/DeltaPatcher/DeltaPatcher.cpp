@@ -185,6 +185,12 @@ void DeltaPatcher ::Update_DeltaPatchMachine_action_doVerifyFinal(SmId smId, Upd
 
 void DeltaPatcher ::Update_DeltaPatchMachine_action_enterIdle(SmId smId, Update_DeltaPatchMachine::Signal signal) {
     FW_ASSERT(smId == SmId::deltaPatchMachine, static_cast<FwAssertArgType>(smId));
+    // The initial transition runs inside init(), before the topology is wired and before the telemetry
+    // packetizer is configured, so it must not emit: IDLE is the State channel's default and needs no
+    // announcement. Every later IDLE entry (complete, failed, aborted) is announced.
+    if (signal == Update_DeltaPatchMachine::Signal::__FPRIME_INITIAL_TRANSITION) {
+        return;
+    }
     this->reportState(DeltaPatchState::IDLE);
 }
 
